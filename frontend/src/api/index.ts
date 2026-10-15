@@ -8,6 +8,7 @@ import type {
   RuleRevision,
   RuleSet,
   RuleTemplate,
+  RevisedCopyRequest,
   TokenResponse,
   Workspace,
 } from "@/types";
@@ -52,6 +53,12 @@ export const documentApi = {
   },
   remove(id: number) {
     return http.delete(`/documents/${id}`);
+  },
+  revisedCopy(documentId: number, data: RevisedCopyRequest) {
+    return http.post(`/documents/${documentId}/revised-copy`, data, {
+      responseType: "blob",
+      timeout: 120000,
+    });
   },
 };
 

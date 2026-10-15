@@ -26,10 +26,15 @@
           <el-tag :type="issue.severity === '重要' ? 'danger' : issue.severity === '一般' ? 'warning' : 'info'" size="small">{{ issue.severity }}</el-tag>
           <span>{{ issue.category }}</span>
           <el-button link type="primary" @click="emit('locate', current.document_id, issue.paragraph_index)">定位原文 · 段落 {{ issue.paragraph_index + 1 }} →</el-button>
+          <el-tag v-if="acceptedFix(index)" type="success" size="small">已接纳</el-tag>
+          <el-button v-if="acceptedFix(index)" link type="danger" @click="emit('reject', current.id, index)">取消接纳</el-button>
+          <el-button v-else link type="success" @click="acceptIssue(issue, index)">接纳并修订</el-button>
         </div>
         <button class="quote" type="button" title="点击定位到原文段落" @click="emit('locate', current.document_id, issue.paragraph_index)">{{ issue.quote }}</button>
         <p><b>问题：</b>{{ issue.reason }}</p>
         <p class="suggestion"><b>建议：</b>{{ issue.suggestion }}</p>
+        <p v-if="replacementCandidate(issue)" class="recommended"><b>推荐修订文本：</b>{{ replacementCandidate(issue) }}</p>
+        <p v-if="acceptedFix(index)" class="accepted"><b>确认替换为：</b>{{ acceptedFix(index)?.replacement_text }}</p>
       </article>
     </div>
     <el-empty v-else-if="!running && !historyLoading && !error" description="选择文档后开始内容审查，无需格式规则。" :image-size="70" />
@@ -41,10 +46,15 @@ import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { contentReviewApi } from "@/api";
 import { errText } from "@/api/http";
-import type { ContentReview, DocumentItem } from "@/types";
+import type { ContentIssue, ContentRepairFix, ContentReview, DocumentItem } from "@/types";
 
-const props = defineProps<{ workspaceId: number | null; document: DocumentItem | null }>();
-const emit = defineEmits<{ (e: "locate", documentId: number, paragraphIndex: number): void }>();
+const props = defineProps<{ workspaceId: number | null; document: DocumentItem | null; acceptedFixes: ContentRepairFix[] }>();
+const emit = defineEmits<{
+  (e: "locate", documentId: number, paragraphIndex: number): void;
+  (e: "accept", fix: ContentRepairFix): void;
+  (e: "reject", reviewId: number, issueIndex: number): void;
+  (e: "clear-review", reviewId: number): void;
+}>();
 const instructions = ref(""); const history = ref<ContentReview[]>([]);
 const selectedId = ref<number | null>(null); const running = ref(false);
 const historyLoading = ref(false); const error = ref("");
@@ -93,11 +103,46 @@ async function removeCurrent() {
   try {
     await contentReviewApi.remove(item.id);
     if (request !== generation) return;
+    emit("clear-review", item.id);
     history.value = history.value.filter(review => review.id !== item.id);
     selectedId.value = history.value[0]?.id ?? null;
     ElMessage.success("内容审查记录已删除");
   } catch (e) {
     if (request === generation) error.value = errText(e);
+  }
+}
+function acceptedFix(issueIndex: number): ContentRepairFix | undefined {
+  return props.acceptedFixes.find(fix => fix.review_id === current.value?.id && fix.issue_index === issueIndex);
+}
+function replacementCandidate(issue: ContentIssue): string | null {
+  const explicit = issue.recommended_replacement?.trim();
+  if (explicit) return explicit;
+  // 兼容旧历史：只取“改为/替换为”之后引号中的目标文本。
+  // 无法确定时留空，绝不把整段说明复制进 Word。
+  const afterChange = issue.suggestion.split(/改为|改成|修改为|更正为|替换为|调整为/, 2)[1];
+  if (!afterChange) return null;
+  const match = afterChange.match(/[“"「]([^”"」]{1,300})[”"」]/);
+  return match?.[1].trim() || null;
+}
+async function acceptIssue(issue: ContentIssue, issueIndex: number) {
+  const review = current.value;
+  if (!review) return;
+  try {
+    const { value } = await ElMessageBox.prompt(
+      "请确认将替换原文引用的具体文本。系统只会按此处确认的文本生成副本，不会再次调用 AI。",
+      "接纳内容建议",
+      {
+        inputValue: replacementCandidate(issue) ?? "",
+        inputType: "textarea",
+        inputPlaceholder: "请输入要替换原文引用的具体文本",
+        inputValidator: (value) => value.trim() ? true : "替换文本不能为空",
+        confirmButtonText: "确认接纳",
+        cancelButtonText: "取消",
+      },
+    );
+    emit("accept", { review_id: review.id, issue_index: issueIndex, replacement_text: value.trim() });
+  } catch {
+    // 用户取消时不改变接纳状态。
   }
 }
 onBeforeUnmount(() => { generation++; });
@@ -107,5 +152,5 @@ function date(value: string) {
 </script>
 
 <style scoped>
-.content-review{min-height:480px;color:#34445f}header,.history,.issue-head{display:flex;align-items:center;gap:12px;justify-content:space-between}h3{margin:0;font-size:19px}header p{margin:6px 0;font-size:13px;word-break:break-all}.notice{color:#65738c;line-height:1.8;font-size:13px}.scope{color:#7e8b9f;font-size:12px;line-height:1.7}.history{justify-content:flex-start;margin:20px 0;font-size:13px}.history .el-select{width:300px;max-width:100%}.result>p{white-space:pre-wrap;line-height:1.7}.issue{margin:16px 0;padding:16px;border:1px solid #e4eaf4;border-radius:10px}.issue-head{justify-content:flex-start;font-size:13px}.issue-head .el-button{margin-left:auto}.quote{display:block;width:100%;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;border:0;border-left:3px solid #6b85df;background:#f3f6fd;color:#3c507d;padding:12px;margin-top:12px;cursor:pointer;font:inherit;font-size:14px;line-height:1.7}.quote:hover{background:#eaf0ff}.issue p{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.8}.suggestion{padding:12px;border-radius:8px;background:#f0f9f5}.el-alert{margin-top:12px}@media(max-width:760px){header,.history{align-items:flex-start;flex-direction:column}.issue-head{flex-wrap:wrap}}
+.content-review{min-height:480px;color:#34445f}header,.history,.issue-head{display:flex;align-items:center;gap:12px;justify-content:space-between}h3{margin:0;font-size:19px}header p{margin:6px 0;font-size:13px;word-break:break-all}.notice{color:#65738c;line-height:1.8;font-size:13px}.scope{color:#7e8b9f;font-size:12px;line-height:1.7}.history{justify-content:flex-start;margin:20px 0;font-size:13px}.history .el-select{width:300px;max-width:100%}.result>p{white-space:pre-wrap;line-height:1.7}.issue{margin:16px 0;padding:16px;border:1px solid #e4eaf4;border-radius:10px}.issue-head{justify-content:flex-start;font-size:13px}.issue-head .el-button{margin-left:auto}.issue-head .el-tag~.el-button{margin-left:0}.quote{display:block;width:100%;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;border:0;border-left:3px solid #6b85df;background:#f3f6fd;color:#3c507d;padding:12px;margin-top:12px;cursor:pointer;font:inherit;font-size:14px;line-height:1.7}.quote:hover{background:#eaf0ff}.issue p{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.8}.suggestion{padding:12px;border-radius:8px;background:#f0f9f5}.recommended{padding:10px 12px;border-radius:8px;border:1px solid #cfe0ff;background:#f2f6ff;color:#36528f}.accepted{padding:10px 12px;border-radius:8px;background:#eef9f3;color:#276a50}.el-alert{margin-top:12px}@media(max-width:760px){header,.history{align-items:flex-start;flex-direction:column}.issue-head{flex-wrap:wrap}}
 </style>

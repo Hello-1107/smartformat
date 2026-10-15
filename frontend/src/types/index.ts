@@ -193,6 +193,7 @@ export interface ContentIssue {
   severity: "重要" | "一般" | "建议";
   reason: string;
   suggestion: string;
+  recommended_replacement?: string | null;
 }
 
 export interface ContentReview {
@@ -205,4 +206,18 @@ export interface ContentReview {
   created_at: string;
   summary: string;
   issues: ContentIssue[];
+}
+
+/** 用户明确确认后，写入修订副本的内容替换；不会触发任何 AI 调用。 */
+export interface ContentRepairFix {
+  review_id: number;
+  issue_index: number;
+  replacement_text: string;
+}
+
+export interface RevisedCopyRequest {
+  workspace_id: number;
+  check_id?: number | null;
+  format_violation_indexes: number[];
+  content_fixes: ContentRepairFix[];
 }

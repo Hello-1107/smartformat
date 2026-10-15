@@ -18,11 +18,16 @@ SYSTEM_PROMPT = """你是中文文档内容审查助手，检查措辞、语法�
 {"paragraph_index":0,"quote":"该段落中逐字复制的连续原文片段",
 "category":"措辞|语法|逻辑|一致性|事实待核实|其他（选一个）",
 "severity":"重要|一般|建议（选一个）","reason":"为何不合理",
-"suggestion":"具体修改建议或可替换文本"}]}
+"suggestion":"说明问题和修改理由",
+"recommended_replacement":"仅替换 quote 的具体推荐文字；无法安全给出时为 null"}]}
 paragraph_index 必须来自输入，不得重新编号。quote 必须是对应段落的非空连续子串，
 保留原文的标点和空格。每条建议定位到一个段落，最多返回50条最值得修改的问题，
 如果超过50条，在summary说明尚有其他问题。没有发现问题时issues为空数组，
-summary注明本次未发现明显问题，不能保证内容完全正确。"""
+summary注明本次未发现明显问题，不能保证内容完全正确。
+recommended_replacement 必须是用户可直接确认、用于替换 quote 的完整具体文本，不能写“建议修改为”之类说明。
+例如 quote 为“兄长32岁”且应统一为 33 岁时，recommended_replacement 必须为“兄长33岁”，
+绝不能填写“将兄长32岁改为兄长33岁”或整段建议。
+对需要核实的事实，不得编造数据；可以给出不含未核实数字的保守表述，若仍不安全则返回 null。"""
 
 
 def review_content(

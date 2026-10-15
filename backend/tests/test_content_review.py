@@ -36,6 +36,7 @@ def fake_response(monkeypatch, result=None, finish_reason="stop"):
                 "paragraph_index": 2, "quote": "本季度销售额为200万元。",
                 "category": "一致性", "severity": "重要",
                 "reason": "与前文100万元不一致", "suggestion": "核对财务数据，统一销售额。",
+                "recommended_replacement": "本季度销售额数据待核实。",
             }],
         }
     calls = []
@@ -101,6 +102,7 @@ def test_content_review_roundtrip(client, auth, workspace, monkeypatch):
     item = response.json()
     assert item["paragraph_count"] == 4
     assert item["issues"][0]["paragraph_index"] == 2
+    assert item["issues"][0]["recommended_replacement"] == "本季度销售额数据待核实。"
     prompt = json.loads(calls[0]["messages"][1]["content"])
     assert prompt["review_focus"] == "检查数据一致性"
     assert prompt["paragraphs"][1]["text"] == "本季度销售额为200万元。"

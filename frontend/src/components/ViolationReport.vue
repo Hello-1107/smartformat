@@ -44,6 +44,13 @@
             {{ row.paragraph_index == null ? "-" : `#${row.paragraph_index}` }}
           </template>
         </el-table-column>
+        <el-table-column label="修订" width="112">
+          <template #default="{ row }">
+            <el-tooltip :disabled="repairable(row)" content="此类问题不能安全地自动修订，请手动处理。" placement="left">
+              <span><el-checkbox :model-value="acceptedIndexes.includes(row._index)" :disabled="!repairable(row)" @click.stop @change="emit('accept', row._index, Boolean($event))">接纳修复</el-checkbox></span>
+            </el-tooltip>
+          </template>
+        </el-table-column>
       </el-table>
     </template>
     <el-empty v-else description="选择文档与规则后，点击「开始审查」" />
@@ -54,10 +61,16 @@
 import { computed, ref, watch } from "vue";
 import type { CheckItem, Violation } from "@/types";
 
-const props = defineProps<{ check: CheckItem | null }>();
-const emit = defineEmits<{ (e: "locate", paragraphIndex: number): void }>();
+type IndexedViolation = Violation & { _index: number };
+const props = defineProps<{ check: CheckItem | null; acceptedIndexes: number[] }>();
+const emit = defineEmits<{
+  (e: "locate", paragraphIndex: number): void;
+  (e: "accept", violationIndex: number, accepted: boolean): void;
+}>();
 const filter = ref("all");
-const filteredViolations = computed(() => props.check?.violations.filter((v) => filter.value === "all" || v.category === filter.value) ?? []);
+const filteredViolations = computed<IndexedViolation[]>(() => props.check?.violations
+  .map((violation, index) => ({ ...violation, _index: index }))
+  .filter((violation) => filter.value === "all" || violation.category === filter.value) ?? []);
 watch(() => props.check?.id, () => { filter.value = "all"; });
 
 const CAT: Record<string, string> = {
@@ -83,6 +96,15 @@ function fmt(v: unknown): string {
   if (v === null || v === undefined) return "未设置";
   if (typeof v === "boolean") return v ? "是" : "否";
   return String(v);
+}
+
+function repairable(violation: Violation): boolean {
+  const fields = new Set([
+    "font:name", "font:ascii_name", "font:size", "font:bold", "font:italic", "font:color",
+    "paragraph:alignment", "paragraph:line_spacing", "paragraph:space_before", "paragraph:space_after", "paragraph:first_line_indent_chars",
+    "page:paper", "page:width_cm", "page:height_cm", "page:margin_top_cm", "page:margin_bottom_cm", "page:margin_left_cm", "page:margin_right_cm", "page:header_distance_cm", "page:footer_distance_cm",
+  ]);
+  return fields.has(`${violation.category}:${violation.field}`);
 }
 
 function locate(row: Violation) {

@@ -6,6 +6,8 @@
 """
 
 from pathlib import Path
+from urllib.parse import quote
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import FileResponse, Response
@@ -13,14 +15,24 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user, require_membership
-from app.models import Document, User
+from app.models import CheckResult, Document, User
+from app.models.content_review import ContentReview
+from app.schemas.check import Violation
+from app.schemas.content_review import ContentReviewResult
 from app.schemas.document import DocumentDetail, DocumentOut, ParsedDocument
+from app.schemas.revision import RevisedCopyCreate
 from app.services.docx_parser import parse_docx
 from app.services.storage import save_upload
 from app.services.document_content import preview_bytes
-from app.models.content_review import ContentReview
+from app.services.revision_copy import (
+    ContentReplacement,
+    RepairError,
+    build_revised_copy,
+    is_repairable_format,
+)
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+logger = logging.getLogger(__name__)
 
 ALLOWED_SUFFIX = ".docx"
 
@@ -139,6 +151,85 @@ def preview_document(
     return Response(
         content, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Cache-Control": "no-store"},
+    )
+
+
+@router.post("/{document_id}/revised-copy")
+def create_revised_copy(
+    document_id: int,
+    body: RevisedCopyCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    """按用户确认的审查项生成内存中的 .docx 副本，源文件保持不变。"""
+    require_membership(db, user, body.workspace_id)
+    doc = db.get(Document, document_id)
+    if doc is None or doc.workspace_id != body.workspace_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "文档不存在")
+    if not Path(doc.stored_path).is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "文档文件已丢失")
+
+    format_violations: list[Violation] = []
+    if body.format_violation_indexes:
+        if body.check_id is None:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "请选择对应的格式审查结果")
+        check = db.get(CheckResult, body.check_id)
+        if check is None or check.workspace_id != body.workspace_id or check.document_id != doc.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "格式审查结果不存在")
+        if len(set(body.format_violation_indexes)) != len(body.format_violation_indexes):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "格式修订项不能重复")
+        for index in body.format_violation_indexes:
+            if not 0 <= index < len(check.violations_json):
+                raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "格式修订项不存在")
+            violation = Violation.model_validate(check.violations_json[index])
+            if not is_repairable_format(violation):
+                raise HTTPException(
+                    status.HTTP_400_BAD_REQUEST,
+                    f"「{violation.message}」暂不支持自动修复",
+                )
+            format_violations.append(violation)
+
+    content_fixes: list[ContentReplacement] = []
+    seen_content_keys: set[tuple[int, int]] = set()
+    for fix in body.content_fixes:
+        key = (fix.review_id, fix.issue_index)
+        if key in seen_content_keys:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "内容修订项不能重复")
+        seen_content_keys.add(key)
+        review = db.get(ContentReview, fix.review_id)
+        if review is None or review.workspace_id != body.workspace_id or review.document_id != doc.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "内容审查记录不存在")
+        result = ContentReviewResult.model_validate(review.result_json)
+        if not 0 <= fix.issue_index < len(result.issues):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "内容修订项不存在")
+        issue = result.issues[fix.issue_index]
+        content_fixes.append(
+            ContentReplacement(
+                paragraph_index=issue.paragraph_index,
+                quote=issue.quote,
+                replacement_text=fix.replacement_text,
+                category=issue.category,
+            )
+        )
+
+    try:
+        content = build_revised_copy(
+            doc.stored_path, doc.filename, format_violations, content_fixes
+        )
+    except RepairError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("生成修订后副本失败：document_id=%s", document_id)
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "无法生成修订后副本") from exc
+
+    filename = f"{Path(doc.filename).stem}_修订后副本.docx"
+    return Response(
+        content,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+            "Cache-Control": "no-store",
+        },
     )
 
 

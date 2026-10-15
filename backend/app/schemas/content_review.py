@@ -18,6 +18,8 @@ class ContentIssue(BaseModel):
     severity: Literal["重要", "一般", "建议"]
     reason: str = Field(min_length=1, max_length=2000)
     suggestion: str = Field(min_length=1, max_length=3000)
+    # 只针对 quote 的具体替换文本；旧记录和不可安全改写的问题可为 None。
+    recommended_replacement: str | None = Field(default=None, max_length=3000)
 
 
 class ContentReviewResult(BaseModel):
