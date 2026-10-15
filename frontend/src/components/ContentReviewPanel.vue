@@ -14,6 +14,7 @@
       <el-select v-model="selectedId" :disabled="running" aria-label="内容审查历史">
         <el-option v-for="item in history" :key="item.id" :value="item.id" :label="date(item.created_at) + ' · ' + item.issues.length + ' 条建议'" />
       </el-select>
+      <el-button link type="danger" :disabled="running || !current" @click="removeCurrent">删除本次</el-button>
     </div>
     <div v-if="current" class="result">
       <h4>发现 {{ current.issues.length }} 条修改建议</h4>
@@ -37,6 +38,7 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
+import { ElMessage, ElMessageBox } from "element-plus";
 import { contentReviewApi } from "@/api";
 import { errText } from "@/api/http";
 import type { ContentReview, DocumentItem } from "@/types";
@@ -76,6 +78,27 @@ async function run() {
     selectedId.value = response.data.id;
   } catch (e) { if (request === generation) error.value = errText(e); }
   finally { if (request === generation) running.value = false; }
+}
+async function removeCurrent() {
+  const item = current.value;
+  if (!item || running.value) return;
+  try {
+    await ElMessageBox.confirm("删除后无法恢复，确认删除本次内容审查记录？", "删除审查记录", {
+      type: "warning", confirmButtonText: "删除", cancelButtonText: "取消",
+    });
+  } catch {
+    return;
+  }
+  const request = generation;
+  try {
+    await contentReviewApi.remove(item.id);
+    if (request !== generation) return;
+    history.value = history.value.filter(review => review.id !== item.id);
+    selectedId.value = history.value[0]?.id ?? null;
+    ElMessage.success("内容审查记录已删除");
+  } catch (e) {
+    if (request === generation) error.value = errText(e);
+  }
 }
 onBeforeUnmount(() => { generation++; });
 function date(value: string) {

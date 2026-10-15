@@ -137,6 +137,7 @@ export interface RuleTemplate {
   name: string;
   description: string;
   ruleset: RuleSet;
+  source: "system" | "workspace";
 }
 
 export interface RuleRevision {

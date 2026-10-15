@@ -142,6 +142,21 @@ def list_checks(
     return [_to_out(c) for c in checks]
 
 
+@router.delete("/{check_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_check(
+    check_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    """删除一条格式审查历史，不会影响文档或规则。"""
+    check = db.get(CheckResult, check_id)
+    if check is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "审查结果不存在")
+    require_membership(db, user, check.workspace_id)
+    db.delete(check)
+    db.commit()
+
+
 @router.get("/{check_id}", response_model=CheckOut)
 def get_check(
     check_id: int,

@@ -181,7 +181,9 @@ def test_batch_check_creates_one_result_per_document(client, auth, workspace, mo
 
 def test_rule_template_versions_and_restore(client, auth, workspace) -> None:
     headers, _ = auth
-    templates = client.get("/api/rules/templates", headers=headers)
+    templates = client.get(
+        "/api/rules/templates", params={"workspace_id": workspace}, headers=headers
+    )
     assert templates.status_code == 200
     assert any(item["id"] == "thesis-standard" for item in templates.json())
 
@@ -217,3 +219,87 @@ def test_rule_template_versions_and_restore(client, auth, workspace) -> None:
 
     versions = client.get(f"/api/rules/{rule_id}/versions", headers=headers)
     assert [item["version"] for item in versions.json()] == [3, 2, 1]
+
+
+def test_workspace_templates_can_be_created_applied_and_deleted(client, auth, workspace) -> None:
+    headers, _ = auth
+    payload = {
+        "workspace_id": workspace,
+        "name": "团队周报规范",
+        "description": "测试用自定义模板",
+        "ruleset": {
+            "name": "团队周报规范",
+            "body": {"font": {"name": "宋体", "size": 12}},
+        },
+    }
+    created = client.post("/api/rules/templates", json=payload, headers=headers)
+    assert created.status_code == 201, created.text
+    template = created.json()
+    assert template["source"] == "workspace"
+    assert template["id"].startswith("workspace:")
+
+    templates = client.get(
+        "/api/rules/templates", params={"workspace_id": workspace}, headers=headers
+    )
+    assert any(item["id"] == template["id"] for item in templates.json())
+    assert any(item["source"] == "system" for item in templates.json())
+
+    applied = client.post(
+        "/api/rules/from-template",
+        json={"workspace_id": workspace, "template_id": template["id"]},
+        headers=headers,
+    )
+    assert applied.status_code == 201, applied.text
+    assert applied.json()["natural_language"] == "工作区模板：团队周报规范"
+
+    other_workspace = client.post(
+        "/api/workspaces", json={"name": "另一工作区"}, headers=headers
+    ).json()["id"]
+    denied = client.post(
+        "/api/rules/from-template",
+        json={"workspace_id": other_workspace, "template_id": template["id"]},
+        headers=headers,
+    )
+    assert denied.status_code == 404
+
+    template_id = int(template["id"].split(":", 1)[1])
+    assert client.delete(f"/api/rules/templates/{template_id}", headers=headers).status_code == 204
+    templates_after = client.get(
+        "/api/rules/templates", params={"workspace_id": workspace}, headers=headers
+    )
+    assert all(item["id"] != template["id"] for item in templates_after.json())
+
+
+def test_delete_check_history_keeps_other_document_results(client, auth, workspace) -> None:
+    headers, _ = auth
+    documents = []
+    for filename in ("one.docx", "two.docx"):
+        uploaded = client.post(
+            "/api/documents",
+            params={"workspace_id": workspace, "filename": filename},
+            content=_docx_bytes(),
+            headers={**headers, "Content-Type": "application/octet-stream"},
+        )
+        assert uploaded.status_code == 201, uploaded.text
+        documents.append(uploaded.json()["id"])
+
+    rule = client.post(
+        "/api/rules/from-template",
+        json={"workspace_id": workspace, "template_id": "business-report"},
+        headers=headers,
+    )
+    assert rule.status_code == 201, rule.text
+    results = []
+    for document_id in documents:
+        response = client.post(
+            "/api/checks",
+            json={"workspace_id": workspace, "document_id": document_id, "rule_id": rule.json()["id"]},
+            headers=headers,
+        )
+        assert response.status_code == 201, response.text
+        results.append(response.json())
+
+    assert client.delete(f"/api/checks/{results[0]['id']}", headers=headers).status_code == 204
+    history = client.get("/api/checks", params={"workspace_id": workspace}, headers=headers)
+    assert history.status_code == 200
+    assert [item["document_id"] for item in history.json()] == [documents[1]]

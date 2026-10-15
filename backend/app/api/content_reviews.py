@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from openai import APITimeoutError
 from sqlalchemy.orm import Session
 
@@ -85,3 +85,18 @@ def list_reviews(
         ContentReview.document_id == document_id,
     ).order_by(ContentReview.id.desc()).limit(50).all()
     return [_out(item) for item in items]
+
+
+@router.delete("/{review_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_review(
+    review_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    """删除一条内容审查记录，不改动源文档。"""
+    item = db.get(ContentReview, review_id)
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "内容审查记录不存在")
+    require_membership(db, user, item.workspace_id)
+    db.delete(item)
+    db.commit()

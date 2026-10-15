@@ -24,11 +24,14 @@
       <button v-for="sample in samples" :key="sample.label" type="button" @click="text = sample.text">{{ sample.label }}</button>
     </div>
     <div v-if="templates.length" class="templates">
-      <span>内置模板</span>
-      <el-tooltip v-for="template in templates" :key="template.id" :content="template.description" placement="top">
-        <button type="button" :disabled="applyingTemplate === template.id" @click="emit('apply-template', template)">
-          {{ applyingTemplate === template.id ? "创建中…" : template.name }}
-        </button>
+      <span>规范模板</span>
+      <el-tooltip v-for="template in templates" :key="template.id" :content="template.description || '未填写模板说明'" placement="top">
+        <div class="template-item">
+          <button type="button" :disabled="applyingTemplate === template.id" @click="emit('apply-template', template)">
+            {{ applyingTemplate === template.id ? "创建中…" : template.name }}
+          </button>
+          <el-button v-if="template.source === 'workspace'" link type="danger" size="small" class="template-delete" title="删除自定义模板" @click.stop="emit('delete-template', template)">×</el-button>
+        </div>
       </el-tooltip>
     </div>
 
@@ -76,6 +79,7 @@ const emit = defineEmits<{
   (e: "delete", rule: RuleItem): void;
   (e: "generate", text: string): void;
   (e: "apply-template", template: RuleTemplate): void;
+  (e: "delete-template", template: RuleTemplate): void;
 }>();
 
 const text = ref("");
@@ -98,7 +102,7 @@ const samples = [
   margin-top: 8px;
   width: 100%;
 }
-.samples,.templates { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 10px; }.samples span,.templates span { margin-right: 2px; color: #99a5b9; font-size: 11px; }.samples button,.templates button { padding: 3px 7px; border: 1px solid #e1e7f2; border-radius: 12px; color: #647593; background: #fff; font-size: 11px; cursor: pointer; }.samples button:hover,.templates button:hover { color: #4162d4; border-color: #b9c9fa; background: #f4f7ff; }.templates { margin-top: 7px; }.templates button:disabled { cursor: wait; opacity: .65; }
+.samples,.templates { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 10px; }.samples span,.templates > span { margin-right: 2px; color: #99a5b9; font-size: 11px; }.samples button,.template-item > button { padding: 3px 7px; border: 1px solid #e1e7f2; border-radius: 12px; color: #647593; background: #fff; font-size: 11px; cursor: pointer; }.samples button:hover,.template-item > button:hover { color: #4162d4; border-color: #b9c9fa; background: #f4f7ff; }.templates { margin-top: 7px; }.template-item > button:disabled { cursor: wait; opacity: .65; }.template-item{display:inline-flex;align-items:center;gap:1px}.template-delete{padding:0 2px!important;font-size:13px!important;line-height:1}
 .list {
   list-style: none;
   margin: 8px 0 0;

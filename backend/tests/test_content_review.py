@@ -108,6 +108,15 @@ def test_content_review_roundtrip(client, auth, workspace, monkeypatch):
         "workspace_id": workspace, "document_id": document_id,
     }, headers=headers)
     assert history.json()[0]["id"] == item["id"]
+    assert client.delete(f"/api/content-reviews/{item['id']}", headers=headers).status_code == 204
+    assert client.get("/api/content-reviews", params={
+        "workspace_id": workspace, "document_id": document_id,
+    }, headers=headers).json() == []
+    # 重新创建一条，继续覆盖预览与删除文档后的级联行为。
+    response = client.post("/api/content-reviews", json={
+        "workspace_id": workspace, "document_id": document_id, "instructions": "检查数据一致性",
+    }, headers=headers)
+    assert response.status_code == 201, response.text
     preview = client.get(f"/api/documents/{document_id}/preview", headers=headers)
     assert preview.status_code == 200
     assert b"sf_content_2" in ZipFile(io.BytesIO(preview.content)).read("word/document.xml")

@@ -69,8 +69,21 @@ export const ruleApi = {
       name,
     });
   },
-  templates() {
-    return http.get<RuleTemplate[]>("/rules/templates");
+  templates(workspaceId: number) {
+    return http.get<RuleTemplate[]>("/rules/templates", {
+      params: { workspace_id: workspaceId },
+    });
+  },
+  createTemplate(workspaceId: number, name: string, description: string, ruleset: RuleSet) {
+    return http.post<RuleTemplate>("/rules/templates", {
+      workspace_id: workspaceId,
+      name,
+      description,
+      ruleset,
+    });
+  },
+  removeTemplate(templateId: number) {
+    return http.delete(`/rules/templates/${templateId}`);
   },
   createFromTemplate(workspaceId: number, templateId: string, name?: string) {
     return http.post<RuleItem>("/rules/from-template", {
@@ -105,6 +118,9 @@ export const contentReviewApi = {
       params: { workspace_id: workspaceId, document_id: documentId },
     });
   },
+  remove(id: number) {
+    return http.delete(`/content-reviews/${id}`);
+  },
 };
 
 export const checkApi = {
@@ -126,5 +142,8 @@ export const checkApi = {
     return http.get<CheckItem[]>("/checks", {
       params: { workspace_id: workspaceId },
     });
+  },
+  remove(id: number) {
+    return http.delete(`/checks/${id}`);
   },
 };

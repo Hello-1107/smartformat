@@ -6,13 +6,14 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user, require_membership
-from app.models import Rule, RuleRevision, User
+from app.models import Rule, RuleRevision, RuleTemplate, User
 from app.schemas.rule import (
     RuleCreate,
     RuleFromTemplateCreate,
     RuleOut,
     RuleRevisionOut,
     RuleSet,
+    RuleTemplateCreate,
     RuleTemplateOut,
 )
 from app.services.deepseek_spec import extract_ruleset
@@ -44,6 +45,24 @@ def _revision_to_out(revision: RuleRevision) -> RuleRevisionOut:
     )
 
 
+def _template_to_out(template: RuleTemplate) -> RuleTemplateOut:
+    return RuleTemplateOut(
+        id=f"workspace:{template.id}",
+        name=template.name,
+        description=template.description,
+        ruleset=RuleSet.model_validate(template.ruleset_json),
+        source="workspace",
+    )
+
+
+def _workspace_template_id(template_id: str) -> int | None:
+    """只接受前端展示用的 workspace:<正整数> 模板标识。"""
+    if not template_id.startswith("workspace:"):
+        return None
+    value = template_id.removeprefix("workspace:")
+    return int(value) if value.isdigit() and int(value) > 0 else None
+
+
 def _snapshot_rule(db: Session, rule: Rule) -> RuleRevision:
     """将规则当前状态保存为一个新的不可变版本。"""
     db.flush()
@@ -66,10 +85,55 @@ def _snapshot_rule(db: Session, rule: Rule) -> RuleRevision:
 
 
 @router.get("/templates", response_model=list[RuleTemplateOut])
-def get_templates(user: User = Depends(get_current_user)) -> list[RuleTemplateOut]:
-    """返回内置模板。模板不属于某个工作区，但必须登录后才可读取。"""
-    del user
-    return list_rule_templates()
+def get_templates(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> list[RuleTemplateOut]:
+    """返回内置模板及当前工作区用户保存的模板。"""
+    require_membership(db, user, workspace_id)
+    custom_templates = (
+        db.query(RuleTemplate)
+        .filter(RuleTemplate.workspace_id == workspace_id)
+        .order_by(RuleTemplate.created_at.desc(), RuleTemplate.id.desc())
+        .all()
+    )
+    return [*list_rule_templates(), *[_template_to_out(item) for item in custom_templates]]
+
+
+@router.post("/templates", response_model=RuleTemplateOut, status_code=status.HTTP_201_CREATED)
+def create_template(
+    body: RuleTemplateCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> RuleTemplateOut:
+    """保存由用户配置的规则集，供同一工作区后续复用。"""
+    require_membership(db, user, body.workspace_id)
+    template = RuleTemplate(
+        workspace_id=body.workspace_id,
+        name=body.name.strip(),
+        description=body.description.strip(),
+        ruleset_json=body.ruleset.model_dump(exclude_none=True),
+        created_by=user.id,
+    )
+    db.add(template)
+    db.commit()
+    db.refresh(template)
+    return _template_to_out(template)
+
+
+@router.delete("/templates/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_template(
+    template_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    template = db.get(RuleTemplate, template_id)
+    if template is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "自定义模板不存在")
+    require_membership(db, user, template.workspace_id)
+    db.delete(template)
+    db.commit()
 
 
 @router.post("/from-template", response_model=RuleOut, status_code=status.HTTP_201_CREATED)
@@ -80,14 +144,28 @@ def create_rule_from_template(
 ) -> RuleOut:
     require_membership(db, user, body.workspace_id)
     template = get_rule_template(body.template_id)
-    if template is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "规则模板不存在")
+    template_name: str
+    ruleset: RuleSet
+    if template is not None:
+        template_name = template.name
+        ruleset = template.ruleset
+        natural_language = f"内置模板：{template.name}"
+    else:
+        template_id = _workspace_template_id(body.template_id)
+        if template_id is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "规则模板不存在")
+        workspace_template = db.get(RuleTemplate, template_id)
+        if workspace_template is None or workspace_template.workspace_id != body.workspace_id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "规则模板不存在")
+        template_name = workspace_template.name
+        ruleset = RuleSet.model_validate(workspace_template.ruleset_json)
+        natural_language = f"工作区模板：{workspace_template.name}"
 
     rule = Rule(
         workspace_id=body.workspace_id,
-        name=body.name or template.name,
-        natural_language=f"内置模板：{template.name}",
-        ruleset_json=template.ruleset.model_dump(exclude_none=True),
+        name=body.name or template_name,
+        natural_language=natural_language,
+        ruleset_json=ruleset.model_dump(exclude_none=True),
         created_by=user.id,
     )
     db.add(rule)

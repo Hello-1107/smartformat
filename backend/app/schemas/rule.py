@@ -9,7 +9,7 @@ RuleSet 是「自然语言格式要求」与「确定性规则引擎」之间的
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 HeadingKey = Literal["h1", "h2", "h3", "h4", "h5", "h6"]
 
@@ -96,12 +96,30 @@ class RuleOut(BaseModel):
 
 
 class RuleTemplateOut(BaseModel):
-    """系统内置、可直接套用的规则模板。"""
+    """系统内置或当前工作区内可直接套用的规则模板。"""
 
     id: str
     name: str
     description: str
     ruleset: RuleSet
+    source: Literal["system", "workspace"] = "system"
+
+
+class RuleTemplateCreate(BaseModel):
+    """从当前已配置的规则集保存一份可复用的工作区模板。"""
+
+    workspace_id: int
+    name: str = Field(min_length=1, max_length=200)
+    description: str = Field(default="", max_length=1000)
+    ruleset: RuleSet
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("模板名称不能为空")
+        return value
 
 
 class RuleFromTemplateCreate(BaseModel):
