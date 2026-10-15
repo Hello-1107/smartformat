@@ -1,9 +1,12 @@
 import http from "./http";
 import type {
+  BatchCheckResult,
   CheckItem,
   DocumentItem,
   RuleItem,
+  RuleRevision,
   RuleSet,
+  RuleTemplate,
   TokenResponse,
   Workspace,
 } from "@/types";
@@ -65,8 +68,24 @@ export const ruleApi = {
       name,
     });
   },
+  templates() {
+    return http.get<RuleTemplate[]>("/rules/templates");
+  },
+  createFromTemplate(workspaceId: number, templateId: string, name?: string) {
+    return http.post<RuleItem>("/rules/from-template", {
+      workspace_id: workspaceId,
+      template_id: templateId,
+      name,
+    });
+  },
   updateRuleset(ruleId: number, ruleset: RuleSet) {
     return http.put<RuleItem>(`/rules/${ruleId}/ruleset`, ruleset);
+  },
+  revisions(ruleId: number) {
+    return http.get<RuleRevision[]>(`/rules/${ruleId}/versions`);
+  },
+  restoreRevision(ruleId: number, version: number) {
+    return http.put<RuleItem>(`/rules/${ruleId}/versions/${version}/restore`);
   },
   remove(id: number) {
     return http.delete(`/rules/${id}`);
@@ -79,6 +98,13 @@ export const checkApi = {
     return http.post<CheckItem>("/checks", {
       workspace_id: workspaceId,
       document_id: documentId,
+      rule_id: ruleId,
+    });
+  },
+  runBatch(workspaceId: number, documentIds: number[], ruleId: number) {
+    return http.post<BatchCheckResult>("/checks/batch", {
+      workspace_id: workspaceId,
+      document_ids: documentIds,
       rule_id: ruleId,
     });
   },

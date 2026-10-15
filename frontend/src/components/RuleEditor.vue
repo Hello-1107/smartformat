@@ -8,6 +8,7 @@
           <p>修改后将直接作为本次及后续审查的规则，不会再次调用 AI。</p>
         </div>
         <div class="actions">
+          <el-button text @click="emit('versions')">版本历史</el-button>
           <el-button text :disabled="saving" @click="reset">还原</el-button>
           <el-button type="primary" :loading="saving" @click="save">保存规则</el-button>
         </div>
@@ -75,7 +76,7 @@ import { ref, watch } from "vue";
 import type { RuleItem, RuleSet, ScopeRule } from "@/types";
 
 const props = defineProps<{ rule: RuleItem | null; saving?: boolean }>();
-const emit = defineEmits<{ (e: "save", ruleset: RuleSet): void }>();
+const emit = defineEmits<{ (e: "save", ruleset: RuleSet): void; (e: "versions"): void }>();
 
 type EditableRuleSet = RuleSet & { body: ScopeRule; headings: Record<string, ScopeRule>; page: NonNullable<RuleSet["page"]> };
 const headingLevels = ["h1", "h2"];

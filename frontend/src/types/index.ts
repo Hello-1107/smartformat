@@ -132,6 +132,23 @@ export interface RuleItem {
   created_at: string;
 }
 
+export interface RuleTemplate {
+  id: string;
+  name: string;
+  description: string;
+  ruleset: RuleSet;
+}
+
+export interface RuleRevision {
+  id: number;
+  rule_id: number;
+  version: number;
+  name: string;
+  natural_language: string;
+  ruleset: RuleSet;
+  created_at: string;
+}
+
 export interface Violation {
   scope: string;
   category: string;
@@ -159,4 +176,11 @@ export interface CheckItem {
   violations: Violation[];
   summary: CheckSummary;
   created_at: string;
+}
+
+export interface BatchCheckResult {
+  checks: CheckItem[];
+  total_documents: number;
+  compliant_documents: number;
+  violation_total: number;
 }

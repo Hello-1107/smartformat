@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Violation(BaseModel):
@@ -30,6 +30,14 @@ class CheckCreate(BaseModel):
     rule_id: int
 
 
+class BatchCheckCreate(BaseModel):
+    """使用同一套规则审查多份文档。"""
+
+    workspace_id: int
+    document_ids: list[int] = Field(min_length=1, max_length=50)
+    rule_id: int
+
+
 class CheckOut(BaseModel):
     id: int
     workspace_id: int
@@ -41,3 +49,12 @@ class CheckOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class BatchCheckOut(BaseModel):
+    """批量审查的明细及适合工作区看板展示的汇总。"""
+
+    checks: list[CheckOut]
+    total_documents: int
+    compliant_documents: int
+    violation_total: int

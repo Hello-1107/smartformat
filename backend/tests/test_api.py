@@ -134,3 +134,86 @@ def test_document_rule_check_flow(client, auth, workspace, monkeypatch) -> None:
     result = r.json()
     assert result["summary"]["total"] >= 1
     assert any(v["field"] == "size" for v in result["violations"])
+
+
+def test_batch_check_creates_one_result_per_document(client, auth, workspace, monkeypatch) -> None:
+    headers, _ = auth
+    document_ids = []
+    for filename in ("first.docx", "second.docx"):
+        response = client.post(
+            "/api/documents",
+            params={"workspace_id": workspace, "filename": filename},
+            content=_docx_bytes(),
+            headers={**headers, "Content-Type": "application/octet-stream"},
+        )
+        assert response.status_code == 201, response.text
+        document_ids.append(response.json()["id"])
+
+    fixed = RuleSet(name="正文规则", body=ScopeRule(font=FontRule(size=12)))
+    monkeypatch.setattr("app.api.rules.extract_ruleset", lambda text: fixed)
+    rule_response = client.post(
+        "/api/rules",
+        json={"workspace_id": workspace, "natural_language": "正文用 12 号字"},
+        headers=headers,
+    )
+    assert rule_response.status_code == 201, rule_response.text
+
+    response = client.post(
+        "/api/checks/batch",
+        json={
+            "workspace_id": workspace,
+            "document_ids": document_ids,
+            "rule_id": rule_response.json()["id"],
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    result = response.json()
+    assert result["total_documents"] == 2
+    assert result["compliant_documents"] == 0
+    assert result["violation_total"] >= 2
+    assert {item["document_id"] for item in result["checks"]} == set(document_ids)
+
+    history = client.get("/api/checks", params={"workspace_id": workspace}, headers=headers)
+    assert history.status_code == 200
+    assert len(history.json()) == 2
+
+
+def test_rule_template_versions_and_restore(client, auth, workspace) -> None:
+    headers, _ = auth
+    templates = client.get("/api/rules/templates", headers=headers)
+    assert templates.status_code == 200
+    assert any(item["id"] == "thesis-standard" for item in templates.json())
+
+    created = client.post(
+        "/api/rules/from-template",
+        json={"workspace_id": workspace, "template_id": "thesis-standard"},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    rule = created.json()
+    rule_id = rule["id"]
+    assert rule["ruleset"]["body"]["font"]["size"] == 12
+
+    versions = client.get(f"/api/rules/{rule_id}/versions", headers=headers)
+    assert versions.status_code == 200
+    assert [item["version"] for item in versions.json()] == [1]
+
+    updated_ruleset = rule["ruleset"]
+    updated_ruleset["name"] = "已修改的论文规范"
+    updated_ruleset["body"]["font"]["size"] = 13
+    updated = client.put(
+        f"/api/rules/{rule_id}/ruleset", json=updated_ruleset, headers=headers
+    )
+    assert updated.status_code == 200, updated.text
+
+    versions = client.get(f"/api/rules/{rule_id}/versions", headers=headers)
+    assert [item["version"] for item in versions.json()] == [2, 1]
+
+    restored = client.put(f"/api/rules/{rule_id}/versions/1/restore", headers=headers)
+    assert restored.status_code == 200, restored.text
+    assert restored.json()["ruleset"]["name"] == "毕业论文规范"
+    assert restored.json()["ruleset"]["body"]["font"]["size"] == 12
+
+    versions = client.get(f"/api/rules/{rule_id}/versions", headers=headers)
+    assert [item["version"] for item in versions.json()] == [3, 2, 1]

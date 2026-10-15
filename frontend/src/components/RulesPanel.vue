@@ -23,6 +23,14 @@
       <span>快速示例</span>
       <button v-for="sample in samples" :key="sample.label" type="button" @click="text = sample.text">{{ sample.label }}</button>
     </div>
+    <div v-if="templates.length" class="templates">
+      <span>内置模板</span>
+      <el-tooltip v-for="template in templates" :key="template.id" :content="template.description" placement="top">
+        <button type="button" :disabled="applyingTemplate === template.id" @click="emit('apply-template', template)">
+          {{ applyingTemplate === template.id ? "创建中…" : template.name }}
+        </button>
+      </el-tooltip>
+    </div>
 
     <el-empty
       v-if="rules.length === 0"
@@ -53,18 +61,21 @@
 
 <script setup lang="ts">
 import { ref } from "vue";
-import type { RuleItem } from "@/types";
+import type { RuleItem, RuleTemplate } from "@/types";
 
 defineProps<{
   rules: RuleItem[];
+  templates: RuleTemplate[];
   modelValue: number | null;
   generating?: boolean;
+  applyingTemplate?: string | null;
 }>();
 
 const emit = defineEmits<{
   (e: "update:modelValue", id: number): void;
   (e: "delete", rule: RuleItem): void;
   (e: "generate", text: string): void;
+  (e: "apply-template", template: RuleTemplate): void;
 }>();
 
 const text = ref("");
@@ -87,7 +98,7 @@ const samples = [
   margin-top: 8px;
   width: 100%;
 }
-.samples { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 10px; }.samples span { margin-right: 2px; color: #99a5b9; font-size: 11px; }.samples button { padding: 3px 7px; border: 1px solid #e1e7f2; border-radius: 12px; color: #647593; background: #fff; font-size: 11px; cursor: pointer; }.samples button:hover { color: #4162d4; border-color: #b9c9fa; background: #f4f7ff; }
+.samples,.templates { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 10px; }.samples span,.templates span { margin-right: 2px; color: #99a5b9; font-size: 11px; }.samples button,.templates button { padding: 3px 7px; border: 1px solid #e1e7f2; border-radius: 12px; color: #647593; background: #fff; font-size: 11px; cursor: pointer; }.samples button:hover,.templates button:hover { color: #4162d4; border-color: #b9c9fa; background: #f4f7ff; }.templates { margin-top: 7px; }.templates button:disabled { cursor: wait; opacity: .65; }
 .list {
   list-style: none;
   margin: 8px 0 0;

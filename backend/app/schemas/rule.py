@@ -93,3 +93,32 @@ class RuleOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class RuleTemplateOut(BaseModel):
+    """系统内置、可直接套用的规则模板。"""
+
+    id: str
+    name: str
+    description: str
+    ruleset: RuleSet
+
+
+class RuleFromTemplateCreate(BaseModel):
+    workspace_id: int
+    template_id: str
+    name: str | None = Field(default=None, max_length=200)
+
+
+class RuleRevisionOut(BaseModel):
+    """规则每次保存后的不可变快照。"""
+
+    id: int
+    rule_id: int
+    version: int
+    name: str
+    natural_language: str
+    ruleset: RuleSet
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
