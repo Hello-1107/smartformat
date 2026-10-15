@@ -8,7 +8,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -17,6 +17,8 @@ from app.models import Document, User
 from app.schemas.document import DocumentDetail, DocumentOut, ParsedDocument
 from app.services.docx_parser import parse_docx
 from app.services.storage import save_upload
+from app.services.document_content import preview_bytes
+from app.models.content_review import ContentReview
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 
@@ -118,6 +120,28 @@ def download_document(
     return FileResponse(doc.stored_path, filename=doc.filename)
 
 
+@router.get("/{document_id}/preview")
+def preview_document(
+    document_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> Response:
+    doc = db.get(Document, document_id)
+    if doc is None:
+        raise HTTPException(404, "文档不存在")
+    require_membership(db, user, doc.workspace_id)
+    if not Path(doc.stored_path).is_file():
+        raise HTTPException(404, "文档文件已丢失")
+    try:
+        content = preview_bytes(doc.stored_path)
+    except Exception as exc:
+        raise HTTPException(400, "无法生成文档预览") from exc
+    return Response(
+        content, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_document(
     document_id: int,
@@ -129,5 +153,9 @@ def delete_document(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "文档不存在")
     require_membership(db, user, doc.workspace_id)
     Path(doc.stored_path).unlink(missing_ok=True)
+    db.query(ContentReview).filter(
+        ContentReview.workspace_id == doc.workspace_id,
+        ContentReview.document_id == doc.id,
+    ).delete(synchronize_session=False)
     db.delete(doc)
     db.commit()

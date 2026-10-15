@@ -27,7 +27,8 @@
         <el-card shadow="never" class="main-card">
           <el-tabs v-model="tab" class="main-tabs">
             <el-tab-pane label="工作区概览" name="dashboard"><WorkspaceDashboard :documents="documents" :rules="rules" :checks="checks" @select="onSelectHistory" @batch="batchDialogVisible = true" /></el-tab-pane>
-            <el-tab-pane label="文档预览" name="preview"><DocPreview :document-id="selectedDocId" :focus-paragraph="focusParagraph" /></el-tab-pane>
+            <el-tab-pane label="文档预览" name="preview"><DocPreview :document-id="selectedDocId" :focus-paragraph="focusParagraph" :focus-kind="focusKind" :active="tab === 'preview'" /></el-tab-pane>
+            <el-tab-pane label="内容审查" name="content"><ContentReviewPanel :workspace-id="ws.currentId" :document="selectedDoc" @locate="onContentLocate" /></el-tab-pane>
             <el-tab-pane name="report"><template #label>审查报告 <span v-if="check && !check.summary.compliant" class="tab-count">{{ check.summary.total }}</span></template><ViolationReport :check="check" @locate="onLocate" /></el-tab-pane>
             <el-tab-pane label="编辑规则" name="editor"><RuleEditor :rule="selectedRule" :saving="savingRule" @save="onSaveRuleset" @versions="versionDialogVisible = true" /></el-tab-pane>
             <el-tab-pane label="规则 JSON" name="ruleset"><pre class="json">{{ rulesetPretty }}</pre></el-tab-pane>
@@ -48,6 +49,7 @@ import { ElMessage, ElMessageBox } from "element-plus";
 import DocumentsPanel from "@/components/DocumentsPanel.vue";
 import RulesPanel from "@/components/RulesPanel.vue";
 import DocPreview from "@/components/DocPreview.vue";
+import ContentReviewPanel from "@/components/ContentReviewPanel.vue";
 import ViolationReport from "@/components/ViolationReport.vue";
 import RuleEditor from "@/components/RuleEditor.vue";
 import CheckHistory from "@/components/CheckHistory.vue";
@@ -63,6 +65,7 @@ import type { CheckItem, DocumentItem, RuleItem, RuleSet, RuleTemplate } from "@
 const router = useRouter(); const auth = useAuthStore(); const ws = useWorkspaceStore();
 const documents = ref<DocumentItem[]>([]); const rules = ref<RuleItem[]>([]); const checks = ref<CheckItem[]>([]); const templates = ref<RuleTemplate[]>([]);
 const selectedDocId = ref<number | null>(null); const selectedRuleId = ref<number | null>(null); const check = ref<CheckItem | null>(null);
+const focusKind = ref<"format" | "content">("format");
 const tab = ref("dashboard"); const focusParagraph = ref<number | null>(null); const uploading = ref(false); const generating = ref(false); const running = ref(false); const savingRule = ref(false); const batchRunning = ref(false); const batchDialogVisible = ref(false); const versionDialogVisible = ref(false); const applyingTemplate = ref<string | null>(null);
 const selectedDoc = computed(() => documents.value.find((d) => d.id === selectedDocId.value) ?? null);
 const selectedRule = computed(() => rules.value.find((r) => r.id === selectedRuleId.value) ?? null);
@@ -88,6 +91,16 @@ function onRuleRestored(rule: RuleItem) { const index = rules.value.findIndex((i
 async function onLocate(index: number) {
   // 即使连续点击同一条问题，也要重新触发子组件的定位监听。
   focusParagraph.value = null;
+  focusKind.value = "format";
+  if (check.value) selectedDocId.value = check.value.document_id;
+  tab.value = "preview";
+  await nextTick();
+  focusParagraph.value = index;
+}
+async function onContentLocate(documentId: number, index: number) {
+  focusParagraph.value = null;
+  focusKind.value = "content";
+  selectedDocId.value = documentId;
   tab.value = "preview";
   await nextTick();
   focusParagraph.value = index;

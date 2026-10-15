@@ -2,6 +2,7 @@ import http from "./http";
 import type {
   BatchCheckResult,
   CheckItem,
+  ContentReview,
   DocumentItem,
   RuleItem,
   RuleRevision,
@@ -93,6 +94,19 @@ export const ruleApi = {
 };
 
 // ---- 审查 ----
+export const contentReviewApi = {
+  run(workspaceId: number, documentId: number, instructions: string) {
+    return http.post<ContentReview>("/content-reviews", {
+      workspace_id: workspaceId, document_id: documentId, instructions,
+    }, { timeout: 150000 });
+  },
+  list(workspaceId: number, documentId: number) {
+    return http.get<ContentReview[]>("/content-reviews", {
+      params: { workspace_id: workspaceId, document_id: documentId },
+    });
+  },
+};
+
 export const checkApi = {
   run(workspaceId: number, documentId: number, ruleId: number) {
     return http.post<CheckItem>("/checks", {

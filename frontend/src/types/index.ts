@@ -184,3 +184,24 @@ export interface BatchCheckResult {
   compliant_documents: number;
   violation_total: number;
 }
+
+export interface ContentIssue {
+  paragraph_index: number;
+  quote: string;
+  category: "措辞" | "语法" | "逻辑" | "一致性" | "事实待核实" | "其他";
+  severity: "重要" | "一般" | "建议";
+  reason: string;
+  suggestion: string;
+}
+
+export interface ContentReview {
+  id: number;
+  workspace_id: number;
+  document_id: number;
+  instructions: string;
+  model: string;
+  paragraph_count: number;
+  created_at: string;
+  summary: string;
+  issues: ContentIssue[];
+}

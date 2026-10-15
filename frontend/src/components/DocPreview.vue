@@ -1,108 +1,89 @@
 <template>
   <div class="preview">
-    <div v-if="!documentId" class="placeholder">请先在左侧选择一份文档</div>
+    <div v-if="documentId == null" class="placeholder">请先在左侧选择一份文档</div>
     <div v-else v-loading="loading" class="doc-wrap">
+      <el-alert v-if="error" :title="error" type="error" :closable="false" />
+      <el-button v-if="error" @click="render">重新加载预览</el-button>
+      <el-alert v-if="locateError" :title="locateError" type="warning" :closable="false" />
       <div ref="container" class="doc-container"></div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { nextTick, onMounted, ref, watch } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { renderAsync } from "docx-preview";
 import http from "@/api/http";
 
-const props = defineProps<{ documentId: number | null; focusParagraph?: number | null }>();
-
+const props = withDefaults(defineProps<{
+  documentId: number | null;
+  focusParagraph?: number | null;
+  focusKind?: "format" | "content";
+  active?: boolean;
+}>(), { focusKind: "format", active: true });
 const container = ref<HTMLElement | null>(null);
-const loading = ref(false);
+const loading = ref(false); const error = ref(""); const locateError = ref("");
 let renderRequest = 0;
+let loadedDocument: number | null = null;
+let controller: AbortController | null = null;
 
 async function render() {
+  const request = ++renderRequest;
+  controller?.abort();
+  controller = new AbortController();
+  const signal = controller.signal;
   const documentId = props.documentId;
-  if (!documentId) {
-    renderRequest += 1;
-    loading.value = false;
-    return;
-  }
-  // documentId 变化会切换 v-if；等容器实际挂载后再读取 ref，避免首次预览空白。
+  loadedDocument = null; error.value = ""; locateError.value = "";
+  loading.value = documentId != null;
   await nextTick();
   const el = container.value;
-  if (!el || documentId !== props.documentId) return;
-  const requestId = ++renderRequest;
-  loading.value = true;
+  if (!el || documentId == null || request !== renderRequest) return;
+  el.replaceChildren();
   try {
-    const resp = await http.get(`/documents/${documentId}/download`, {
-      responseType: "blob",
-    });
-    if (requestId !== renderRequest || documentId !== props.documentId) return;
-    el.innerHTML = "";
-    await renderAsync(resp.data as Blob, el);
-    if (requestId !== renderRequest || documentId !== props.documentId) return;
-    // docx-preview 会将 Word 段落渲染为 p；记录序号后可由审查报告联动定位。
-    el.querySelectorAll("p").forEach((paragraph, index) => {
-      paragraph.setAttribute("data-paragraph-index", String(index));
-    });
-    // 报告可能在文档尚未渲染完时先发出定位请求；渲染完成后再补一次定位。
-    if (props.focusParagraph != null) await focusParagraph(props.focusParagraph);
-  } catch (e) {
-    if (requestId !== renderRequest) return;
-    el.innerHTML = "";
-    el.textContent = "预览失败，请确认文档存在";
-    console.error(e);
+    const response = await http.get("/documents/" + documentId + "/preview", { responseType: "blob", signal });
+    if (request !== renderRequest) return;
+    // 每次请求使用独立容器，过期的异步渲染不能覆盖当前文档。
+    const stage = document.createElement("div");
+    await renderAsync(response.data as Blob, stage, undefined, { useBase64URL: true });
+    if (request !== renderRequest) return;
+    el.replaceChildren(...Array.from(stage.childNodes));
+    loadedDocument = documentId;
+  } catch {
+    if (request !== renderRequest) return;
+    error.value = "预览加载失败，请确认后端已重启、文档存在，然后重试。";
   } finally {
-    if (requestId === renderRequest) loading.value = false;
+    if (request === renderRequest) {
+      loading.value = false;
+      await locate();
+    }
   }
 }
 
-// 首次挂载和之后切换文档都要渲染：仅 immediate watch 会早于 ref 挂载而直接返回。
-onMounted(() => { void render(); });
-watch(() => props.documentId, () => { void render(); });
-
-async function focusParagraph(index: number) {
+async function locate() {
   await nextTick();
+  if (!props.active || props.focusParagraph == null || loading.value || loadedDocument !== props.documentId) return;
   const el = container.value;
   if (!el) return;
-  const target = el.querySelector<HTMLElement>(`[data-paragraph-index="${index}"]`);
-  if (!target) return;
-  el.querySelectorAll(".is-focused").forEach((node) => node.classList.remove("is-focused"));
+  // 书签来自 Word XML 中的原始段落；表格、页眉和分页不会改变编号。
+  const anchor = el.querySelector<HTMLElement>('[id="sf_' + props.focusKind + '_' + props.focusParagraph + '"]');
+  const target = anchor?.closest("p") ?? anchor;
+  el.querySelectorAll(".is-focused").forEach(node => node.classList.remove("is-focused"));
+  if (!target) {
+    locateError.value = "当前预览无法显示该段落，可能包含不受支持的 Word 对象。请结合报告原文检查文档。";
+    return;
+  }
+  locateError.value = "";
   target.classList.add("is-focused");
-  target.scrollIntoView({ behavior: "smooth", block: "center" });
+  if (target.isConnected && target.getClientRects().length) {
+    target.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
 }
-
-watch(() => props.focusParagraph, (index) => {
-  if (index != null) void focusParagraph(index);
-});
+onMounted(() => { void render(); });
+watch(() => props.documentId, () => { void render(); });
+watch(() => [props.focusParagraph, props.focusKind, props.active], () => { void locate(); }, { flush: "post" });
+onBeforeUnmount(() => { renderRequest++; controller?.abort(); });
 </script>
 
 <style scoped>
-.preview {
-  height: 100%;
-  min-height: 480px;
-}
-.placeholder {
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #909399;
-}
-.doc-wrap {
-  height: 100%;
-  overflow-y: auto;
-  background: #fff;
-  border: 1px solid #ebeef5;
-  border-radius: 4px;
-  padding: 16px;
-}
-.doc-container {
-  background: #fff;
-}
-.doc-container :deep(.is-focused) {
-  background: #fff3bd !important;
-  border-radius: 3px;
-  outline: 2px solid #f4c84b;
-  outline-offset: 2px;
-  transition: background .2s ease;
-}
+.preview{min-height:480px}.placeholder{min-height:480px;display:flex;align-items:center;justify-content:center;color:#909399}.doc-wrap{min-height:480px;overflow:auto;background:#fff;border:1px solid #ebeef5;border-radius:4px;padding:16px}.doc-container{background:#fff}.doc-container :deep(.is-focused){background:#fff3bd!important;border-radius:3px;outline:2px solid #f4c84b;outline-offset:2px;scroll-margin:40px}.el-alert{margin-bottom:12px}
 </style>
