@@ -1,0 +1,96 @@
+<template>
+  <div class="report">
+    <template v-if="check">
+      <div class="summary" :class="check.summary.compliant ? 'is-pass' : 'is-issue'">
+        <span class="summary-icon">{{ check.summary.compliant ? "✓" : "!" }}</span>
+        <div><strong>{{ check.summary.compliant ? "本次审查全部通过" : `发现 ${check.summary.total} 处格式问题` }}</strong><p>{{ check.summary.compliant ? "文档符合所选规则，可放心提交。" : "点击下方问题可在文档预览中快速定位。" }}</p></div>
+        <div class="summary-chips"><span v-for="(cnt, cat) in check.summary.by_category" :key="cat" class="chip">{{ catLabel(cat) }} {{ cnt }}</span></div>
+      </div>
+
+      <el-empty
+        v-if="check.violations.length === 0"
+        description="恭喜，未发现格式问题"
+      />
+      <div v-if="!check.summary.compliant" class="report-tools">
+        <el-radio-group v-model="filter" size="small">
+          <el-radio-button label="all">全部 {{ check.violations.length }}</el-radio-button>
+          <el-radio-button v-for="(_, cat) in check.summary.by_category" :key="cat" :label="cat">{{ catLabel(cat) }}</el-radio-button>
+        </el-radio-group>
+        <span>点击行可定位段落</span>
+      </div>
+      <el-table
+        v-if="check.violations.length > 0"
+        :data="filteredViolations"
+        class="violation-table"
+        max-height="480"
+        @row-click="locate"
+      >
+        <el-table-column prop="scope" label="作用域" width="110">
+          <template #default="{ row }">{{ scopeLabel(row.scope) }}</template>
+        </el-table-column>
+        <el-table-column prop="category" label="类别" width="100">
+          <template #default="{ row }">{{ catLabel(row.category) }}</template>
+        </el-table-column>
+        <el-table-column prop="field" label="字段" width="150" />
+        <el-table-column label="期望值" width="140">
+          <template #default="{ row }">{{ fmt(row.expected) }}</template>
+        </el-table-column>
+        <el-table-column label="实际值" width="140">
+          <template #default="{ row }">{{ fmt(row.actual) }}</template>
+        </el-table-column>
+        <el-table-column prop="message" label="审查说明" min-width="220" />
+        <el-table-column label="段落" width="90">
+          <template #default="{ row }">
+            {{ row.paragraph_index == null ? "-" : `#${row.paragraph_index}` }}
+          </template>
+        </el-table-column>
+      </el-table>
+    </template>
+    <el-empty v-else description="选择文档与规则后，点击「开始审查」" />
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed, ref, watch } from "vue";
+import type { CheckItem, Violation } from "@/types";
+
+const props = defineProps<{ check: CheckItem | null }>();
+const emit = defineEmits<{ (e: "locate", paragraphIndex: number): void }>();
+const filter = ref("all");
+const filteredViolations = computed(() => props.check?.violations.filter((v) => filter.value === "all" || v.category === filter.value) ?? []);
+watch(() => props.check?.id, () => { filter.value = "all"; });
+
+const CAT: Record<string, string> = {
+  font: "字体",
+  paragraph: "段落",
+  page: "页面",
+  heading_structure: "标题结构",
+};
+
+function catLabel(c: string): string {
+  return CAT[c] ?? c;
+}
+
+function scopeLabel(s: string): string {
+  if (s === "body") return "正文";
+  if (s === "page") return "页面";
+  if (s === "heading_structure") return "标题结构";
+  if (/^h[1-6]$/.test(s)) return `${s[1]} 级标题`;
+  return s;
+}
+
+function fmt(v: unknown): string {
+  if (v === null || v === undefined) return "未设置";
+  if (typeof v === "boolean") return v ? "是" : "否";
+  return String(v);
+}
+
+function locate(row: Violation) {
+  if (row.paragraph_index != null) emit("locate", row.paragraph_index);
+}
+</script>
+
+<style scoped>
+.report { min-height: 480px; }.summary { display: flex; align-items: center; gap: 13px; padding: 16px 18px; margin-bottom: 16px; border: 1px solid; border-radius: 12px; }.summary.is-pass { border-color: #bcead8; background: linear-gradient(100deg, #effcf6, #fbfffd); }.summary.is-issue { border-color: #ffe0cc; background: linear-gradient(100deg, #fff6f0, #fffdfb); }.summary-icon { display: grid; place-items: center; width: 35px; height: 35px; border-radius: 50%; font-size: 20px; font-weight: 800; }.is-pass .summary-icon { color: #138d64; background: #d8f7e8; }.is-issue .summary-icon { color: #d95e3c; background: #ffe4d8; }.summary strong { color: #24344f; font-size: 15px; }.summary p { margin: 3px 0 0; color: #8390a5; font-size: 12px; }.summary-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }.chip { padding: 4px 8px; color: #5b6981; border-radius: 20px; background: rgba(255,255,255,.72); font-size: 12px; }.report-tools { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 12px; }.report-tools > span { color: #95a1b5; font-size: 12px; }.violation-table { --el-table-border-color: #edf1f6; --el-table-header-bg-color: #f7f9fc; }.violation-table :deep(.el-table__row) { cursor: pointer; }.violation-table :deep(.el-table__row:hover > td) { background: #f2f6ff !important; }
+@media (max-width: 720px) { .summary { align-items: flex-start; flex-wrap: wrap; }.summary-chips { width: 100%; margin-left: 48px; }.report-tools { align-items: flex-start; flex-direction: column; } }
+</style>
