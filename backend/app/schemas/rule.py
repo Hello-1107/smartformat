@@ -84,6 +84,13 @@ class RuleCreate(BaseModel):
     name: str | None = None
 
 
+class ManualRuleCreate(BaseModel):
+    """用户在可视化编辑器中直接创建规则，不调用 AI 或套用模板。"""
+
+    workspace_id: int
+    ruleset: RuleSet
+
+
 class RuleOut(BaseModel):
     id: int
     workspace_id: int

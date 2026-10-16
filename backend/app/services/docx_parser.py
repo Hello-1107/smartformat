@@ -8,7 +8,6 @@ from __future__ import annotations
 from pathlib import Path
 
 from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.shared import Length
 
@@ -32,13 +31,35 @@ _HEADING_STYLES = {
     "title": 1,
 }
 
-_ALIGN_MAP = {
-    WD_ALIGN_PARAGRAPH.LEFT: "left",
-    WD_ALIGN_PARAGRAPH.CENTER: "center",
-    WD_ALIGN_PARAGRAPH.RIGHT: "right",
-    WD_ALIGN_PARAGRAPH.JUSTIFY: "justify",
-    WD_ALIGN_PARAGRAPH.DISTRIBUTE: "justify",
+_ALIGN_XML_MAP = {
+    "left": "left",
+    "start": "left",
+    "center": "center",
+    "right": "right",
+    "end": "right",
+    "both": "justify",
+    "distribute": "justify",
+    "thaiDistribute": "justify",
+    "lowKashida": "justify",
+    "mediumKashida": "justify",
+    "highKashida": "justify",
 }
+
+
+def _paragraph_alignment(paragraph: object) -> str | None:
+    """直接读取 XML 并归一化对齐方式。
+
+    新版 Word 可能写入 start/end 等逻辑方向值，旧版 python-docx 在读取
+    ``paragraph_format.alignment`` 时会直接抛 ValueError，因此不能依赖枚举属性。
+    """
+    ppr = paragraph._p.pPr
+    if ppr is None:
+        return None
+    jc = ppr.find(qn("w:jc"))
+    if jc is None:
+        return None
+    raw = jc.get(qn("w:val"))
+    return _ALIGN_XML_MAP.get(raw) if raw else None
 
 
 def _emu_to_cm(emu: int | None) -> float | None:
@@ -281,7 +302,7 @@ def parse_docx(path: str | Path) -> ParsedDocument:
                 style_name=(para.style.name if para.style is not None else ""),
                 level=level,
                 font=font,
-                alignment=_ALIGN_MAP.get(pf.alignment) if pf.alignment else None,
+                alignment=_paragraph_alignment(para),
                 line_spacing=_line_spacing_multiple(pf),
                 space_before=(
                     round(pf.space_before.pt, 2)

@@ -215,9 +215,95 @@ export interface ContentRepairFix {
   replacement_text: string;
 }
 
+export type TemplateBlockMode = "fixed" | "variable" | "ignore";
+export type TemplateDataType = "text" | "number" | "date" | "id_number" | "phone";
+
+export interface TemplateParagraphFormat {
+  font: FontInfo;
+  alignment: string | null;
+  line_spacing: number | null;
+  space_before: number | null;
+  space_after: number | null;
+  first_line_indent_chars: number | null;
+}
+
+export interface TemplateBlock {
+  id: string;
+  order: number;
+  kind: "paragraph" | "table_cell";
+  location: string;
+  content_index: number;
+  top_level_paragraph_index: number | null;
+  table_index: number | null;
+  row_index: number | null;
+  column_index: number | null;
+  paragraph_in_cell: number | null;
+  text: string;
+  label: string;
+  mode: TemplateBlockMode;
+  required: boolean;
+  data_type: TemplateDataType;
+  check_format: boolean;
+  format: TemplateParagraphFormat;
+}
+
+export interface DocumentTemplate {
+  id: number;
+  workspace_id: number;
+  version: number;
+  name: string;
+  filename: string;
+  size: number;
+  is_active: boolean;
+  is_published: boolean;
+  config: {
+    check_page: boolean;
+    page: ParsedSection | null;
+    table_shapes: number[][];
+    blocks: TemplateBlock[];
+  };
+  created_at: string;
+}
+
+export interface TemplateIssue {
+  category: "结构" | "固定内容" | "必填" | "字段规范" | "格式" | "页面" | "表格";
+  severity: "错误" | "警告" | "提示";
+  message: string;
+  template_block_id: string | null;
+  template_content_index: number | null;
+  document_content_index: number | null;
+  expected: unknown;
+  actual: unknown;
+  quote: string | null;
+  recommended_replacement: string | null;
+  repairable: boolean;
+  format_violation: Violation | null;
+}
+
+export interface TemplateReview {
+  id: number;
+  workspace_id: number;
+  template_id: number;
+  template_version: number;
+  document_id: number;
+  created_at: string;
+  summary: string;
+  issues: TemplateIssue[];
+  total: number;
+  repairable: number;
+  compliant: boolean;
+}
+
+export interface TemplateRepairFix {
+  review_id: number;
+  issue_index: number;
+  replacement_text?: string | null;
+}
+
 export interface RevisedCopyRequest {
   workspace_id: number;
   check_id?: number | null;
   format_violation_indexes: number[];
   content_fixes: ContentRepairFix[];
+  template_fixes: TemplateRepairFix[];
 }

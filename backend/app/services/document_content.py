@@ -42,7 +42,7 @@ def validate_content(paragraphs: list[ContentParagraph]) -> None:
         raise ValueError("单次内容审查支持最多 30000 字符、1500 个非空段落，请拆分文档后审查")
 
 
-def preview_bytes(path: str | Path) -> bytes:
+def preview_bytes(path: str | Path, content_prefix: str = "sf_content") -> bytes:
     """仅在内存中的预览副本插入书签，原始下载文件不变。"""
     output = BytesIO()
     with ZipFile(path) as source:
@@ -66,7 +66,7 @@ def preview_bytes(path: str | Path) -> bytes:
         for index, element in enumerate(root.xpath("./w:body/w:p")):
             add_anchor(element, f"sf_format_{index}")
         for index, element in enumerate(_paragraphs(root)):
-            add_anchor(element, f"sf_content_{index}")
+            add_anchor(element, f"{content_prefix}_{index}")
         with ZipFile(output, "w") as target:
             for item in source.infolist():
                 data = etree.tostring(root) if item.filename == "word/document.xml" else source.read(item.filename)

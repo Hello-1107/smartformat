@@ -221,6 +221,39 @@ def test_rule_template_versions_and_restore(client, auth, workspace) -> None:
     assert [item["version"] for item in versions.json()] == [3, 2, 1]
 
 
+def test_manual_rule_can_be_created_without_ai_or_template(client, auth, workspace, monkeypatch) -> None:
+    headers, _ = auth
+
+    def must_not_call_ai(_text: str):
+        raise AssertionError("手动创建规则不应调用 DeepSeek")
+
+    monkeypatch.setattr("app.api.rules.extract_ruleset", must_not_call_ai)
+    response = client.post(
+        "/api/rules/manual",
+        json={
+            "workspace_id": workspace,
+            "ruleset": {
+                "name": "自行创建的规则",
+                "body": {
+                    "font": {"name": "宋体", "size": 12},
+                    "paragraph": {"alignment": "justify"},
+                },
+                "headings": {
+                    "h1": {"font": {"name": "黑体", "size": 16, "bold": True}},
+                    "h2": {"font": {"name": "黑体", "size": 14, "bold": True}},
+                },
+            },
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["name"] == "自行创建的规则"
+    assert response.json()["natural_language"] == "用户手动创建"
+    versions = client.get(f"/api/rules/{response.json()['id']}/versions", headers=headers)
+    assert versions.status_code == 200
+    assert [item["version"] for item in versions.json()] == [1]
+
+
 def test_workspace_templates_can_be_created_applied_and_deleted(client, auth, workspace) -> None:
     headers, _ = auth
     payload = {

@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import models  # noqa: F401  确保所有模型被注册到 Base.metadata
 from app.api import api_router
 from app.database import Base, engine
+from app.migrations import apply_compatibility_migrations
 
 
 def create_app() -> FastAPI:
@@ -36,3 +37,4 @@ app = create_app()
 
 # 演示优先：启动时自动建表（生产环境应使用 Alembic 迁移）
 Base.metadata.create_all(bind=engine)
+apply_compatibility_migrations(engine)

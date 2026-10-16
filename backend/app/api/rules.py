@@ -8,6 +8,7 @@ from app.database import get_db
 from app.deps import get_current_user, require_membership
 from app.models import Rule, RuleRevision, RuleTemplate, User
 from app.schemas.rule import (
+    ManualRuleCreate,
     RuleCreate,
     RuleFromTemplateCreate,
     RuleOut,
@@ -166,6 +167,28 @@ def create_rule_from_template(
         name=body.name or template_name,
         natural_language=natural_language,
         ruleset_json=ruleset.model_dump(exclude_none=True),
+        created_by=user.id,
+    )
+    db.add(rule)
+    _snapshot_rule(db, rule)
+    db.commit()
+    db.refresh(rule)
+    return _to_out(rule)
+
+
+@router.post("/manual", response_model=RuleOut, status_code=status.HTTP_201_CREATED)
+def create_manual_rule(
+    body: ManualRuleCreate,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> RuleOut:
+    """保存编辑器直接填写的规则；整个过程不调用 DeepSeek。"""
+    require_membership(db, user, body.workspace_id)
+    rule = Rule(
+        workspace_id=body.workspace_id,
+        name=body.ruleset.name,
+        natural_language="用户手动创建",
+        ruleset_json=body.ruleset.model_dump(exclude_none=True),
         created_by=user.id,
     )
     db.add(rule)

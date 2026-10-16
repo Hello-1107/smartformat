@@ -17,10 +17,12 @@ from app.database import get_db
 from app.deps import get_current_user, require_membership
 from app.models import CheckResult, Document, User
 from app.models.content_review import ContentReview
+from app.models.template_audit import TemplateReview
 from app.schemas.check import Violation
 from app.schemas.content_review import ContentReviewResult
 from app.schemas.document import DocumentDetail, DocumentOut, ParsedDocument
 from app.schemas.revision import RevisedCopyCreate
+from app.schemas.template_audit import TemplateReviewResult
 from app.services.docx_parser import parse_docx
 from app.services.storage import save_upload
 from app.services.document_content import preview_bytes
@@ -212,6 +214,40 @@ def create_revised_copy(
             )
         )
 
+    seen_template_keys: set[tuple[int, int]] = set()
+    for fix in body.template_fixes:
+        key = (fix.review_id, fix.issue_index)
+        if key in seen_template_keys:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "模板修订项不能重复")
+        seen_template_keys.add(key)
+        review = db.get(TemplateReview, fix.review_id)
+        if review is None or review.workspace_id != body.workspace_id or review.document_id != doc.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "模板审查记录不存在")
+        result = TemplateReviewResult.model_validate(review.result_json)
+        if not 0 <= fix.issue_index < len(result.issues):
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "模板修订项不存在")
+        issue = result.issues[fix.issue_index]
+        if not issue.repairable:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, f"「{issue.message}」暂不支持自动修订")
+        if issue.format_violation is not None:
+            if not is_repairable_format(issue.format_violation):
+                raise HTTPException(status.HTTP_400_BAD_REQUEST, f"「{issue.message}」暂不支持自动修订")
+            format_violations.append(issue.format_violation)
+            continue
+        replacement = (fix.replacement_text or "").strip()
+        if not replacement:
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "模板文字修订必须填写替换内容")
+        if issue.document_content_index is None or not issue.quote:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "模板问题缺少可安全替换的原文")
+        content_fixes.append(
+            ContentReplacement(
+                paragraph_index=issue.document_content_index,
+                quote=issue.quote,
+                replacement_text=replacement,
+                category=f"模板审查·{issue.category}",
+            )
+        )
+
     try:
         content = build_revised_copy(
             doc.stored_path, doc.filename, format_violations, content_fixes
@@ -247,6 +283,10 @@ def delete_document(
     db.query(ContentReview).filter(
         ContentReview.workspace_id == doc.workspace_id,
         ContentReview.document_id == doc.id,
+    ).delete(synchronize_session=False)
+    db.query(TemplateReview).filter(
+        TemplateReview.workspace_id == doc.workspace_id,
+        TemplateReview.document_id == doc.id,
     ).delete(synchronize_session=False)
     db.delete(doc)
     db.commit()

@@ -18,7 +18,8 @@ import http from "@/api/http";
 const props = withDefaults(defineProps<{
   documentId: number | null;
   focusParagraph?: number | null;
-  focusKind?: "format" | "content";
+  focusKind?: "format" | "content" | "template";
+  previewUrl?: string;
   active?: boolean;
 }>(), { focusKind: "format", active: true });
 const container = ref<HTMLElement | null>(null);
@@ -40,7 +41,7 @@ async function render() {
   if (!el || documentId == null || request !== renderRequest) return;
   el.replaceChildren();
   try {
-    const response = await http.get("/documents/" + documentId + "/preview", { responseType: "blob", signal });
+    const response = await http.get(props.previewUrl || "/documents/" + documentId + "/preview", { responseType: "blob", signal });
     if (request !== renderRequest) return;
     // 每次请求使用独立容器，过期的异步渲染不能覆盖当前文档。
     const stage = document.createElement("div");
@@ -79,7 +80,7 @@ async function locate() {
   }
 }
 onMounted(() => { void render(); });
-watch(() => props.documentId, () => { void render(); });
+watch(() => [props.documentId, props.previewUrl], () => { void render(); });
 watch(() => [props.focusParagraph, props.focusKind, props.active], () => { void locate(); }, { flush: "post" });
 onBeforeUnmount(() => { renderRequest++; controller?.abort(); });
 </script>

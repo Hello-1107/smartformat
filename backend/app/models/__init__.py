@@ -7,6 +7,7 @@ from app.models.rule import Rule
 from app.models.rule_revision import RuleRevision
 from app.models.rule_template import RuleTemplate
 from app.models.content_review import ContentReview
+from app.models.template_audit import DocumentTemplate, TemplateReview
 from app.models.user import User
 from app.models.workspace import Workspace, WorkspaceMember
 
@@ -21,4 +22,6 @@ __all__ = [
     "RuleTemplate",
     "CheckResult",
     "ContentReview",
+    "DocumentTemplate",
+    "TemplateReview",
 ]

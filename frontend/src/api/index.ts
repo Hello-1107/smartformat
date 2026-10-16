@@ -8,6 +8,9 @@ import type {
   RuleRevision,
   RuleSet,
   RuleTemplate,
+  DocumentTemplate,
+  TemplateBlock,
+  TemplateReview,
   RevisedCopyRequest,
   TokenResponse,
   Workspace,
@@ -62,6 +65,51 @@ export const documentApi = {
   },
 };
 
+// ---- 填写样例模板审查（每个工作区一个当前版本）----
+export const templateAuditApi = {
+  current(workspaceId: number) {
+    return http.get<DocumentTemplate | null>("/template-audits/current", { params: { workspace_id: workspaceId } });
+  },
+  versions(workspaceId: number) {
+    return http.get<DocumentTemplate[]>("/template-audits/versions", { params: { workspace_id: workspaceId } });
+  },
+  upload(workspaceId: number, file: File, name: string) {
+    return http.post<DocumentTemplate>("/template-audits/template", file, {
+      params: { workspace_id: workspaceId, filename: file.name, name },
+      headers: { "Content-Type": "application/octet-stream" },
+      timeout: 120000,
+    });
+  },
+  update(workspaceId: number, name: string, checkPage: boolean, blocks: TemplateBlock[]) {
+    return http.put<DocumentTemplate>("/template-audits/current", {
+      workspace_id: workspaceId,
+      name,
+      check_page: checkPage,
+      blocks: blocks.map(({ id, label, mode, required, data_type, check_format }) => ({
+        id, label, mode, required, data_type, check_format,
+      })),
+    });
+  },
+  activate(workspaceId: number, templateId: number) {
+    return http.post<DocumentTemplate>(`/template-audits/versions/${templateId}/activate`, null, {
+      params: { workspace_id: workspaceId },
+    });
+  },
+  run(workspaceId: number, documentId: number) {
+    return http.post<TemplateReview>("/template-audits/reviews", {
+      workspace_id: workspaceId, document_id: documentId,
+    }, { timeout: 120000 });
+  },
+  reviews(workspaceId: number, documentId: number) {
+    return http.get<TemplateReview[]>("/template-audits/reviews", {
+      params: { workspace_id: workspaceId, document_id: documentId },
+    });
+  },
+  removeReview(reviewId: number) {
+    return http.delete(`/template-audits/reviews/${reviewId}`);
+  },
+};
+
 // ---- 规则 ----
 export const ruleApi = {
   list(workspaceId: number) {
@@ -75,6 +123,9 @@ export const ruleApi = {
       natural_language: naturalLanguage,
       name,
     });
+  },
+  createManual(workspaceId: number, ruleset: RuleSet) {
+    return http.post<RuleItem>("/rules/manual", { workspace_id: workspaceId, ruleset });
   },
   templates(workspaceId: number) {
     return http.get<RuleTemplate[]>("/rules/templates", {
