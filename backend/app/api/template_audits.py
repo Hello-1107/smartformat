@@ -171,6 +171,33 @@ def update_current_template(
     return _template_out(item)
 
 
+@router.post("/current/reanalyze", response_model=DocumentTemplateOut)
+def reanalyze_current_template(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> DocumentTemplateOut:
+    """使用最新确定性识别逻辑重建配置，模板文件和版本号保持不变。"""
+    require_membership(db, user, workspace_id)
+    item = _active(db, workspace_id)
+    if item is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "当前工作区尚未上传表单模板")
+    if not Path(item.stored_path).is_file():
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "模板文件已丢失")
+    previous = TemplateConfiguration.model_validate(item.config_json)
+    try:
+        config = extract_template_configuration(item.stored_path)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"重新识别模板失败：{exc}") from exc
+    config.check_page = previous.check_page
+    item.config_json = config.model_dump()
+    # 新识别结果必须由用户复核后重新发布，不能静默改变正在使用的审查规则。
+    item.is_published = False
+    db.commit()
+    db.refresh(item)
+    return _template_out(item)
+
+
 @router.post("/versions/{template_id}/activate", response_model=DocumentTemplateOut)
 def activate_template_version(
     template_id: int,
@@ -234,7 +261,7 @@ def create_template_review(
     try:
         result = review_against_template(config, document.stored_path)
     except Exception as exc:  # noqa: BLE001
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"模板审查失败：{exc}") from exc
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"表单模板审查失败：{exc}") from exc
     review = TemplateReview(
         workspace_id=body.workspace_id,
         template_id=template.id,

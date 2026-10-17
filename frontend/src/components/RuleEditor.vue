@@ -4,7 +4,7 @@
         <div>
           <p class="eyebrow">RULE CONFIGURATION</p>
           <h3>{{ rule ? "规则编辑器" : "新建规则" }}</h3>
-          <p>{{ rule ? "修改后将直接作为本次及后续审查的规则，不会再次调用 AI。" : "直接填写并创建格式规则，不需要先从左侧选择模板，也不会调用 AI。" }}</p>
+          <p>{{ rule ? "修改后将直接作为本次及后续审查的规则，不会再次调用 AI。" : draft ? "已载入所选预设；可修改任意参数，点击创建后才会保存。" : "直接填写并创建格式规则，不会调用 AI。" }}</p>
         </div>
         <div class="actions">
           <el-button v-if="rule" text :disabled="saving" @click="emit('new')">新建规则</el-button>
@@ -71,7 +71,7 @@
 import { ref, watch } from "vue";
 import type { RuleItem, RuleSet, ScopeRule } from "@/types";
 
-const props = defineProps<{ rule: RuleItem | null; saving?: boolean }>();
+const props = defineProps<{ rule: RuleItem | null; draft?: RuleSet | null; saving?: boolean }>();
 const emit = defineEmits<{
   (e: "save", ruleset: RuleSet): void;
   (e: "save-template", ruleset: RuleSet): void;
@@ -100,11 +100,11 @@ function emptyForm(rule?: RuleSet): EditableRuleSet {
   };
 }
 
-function reset() { form.value = emptyForm(props.rule?.ruleset); }
+function reset() { form.value = emptyForm(props.rule?.ruleset ?? props.draft ?? undefined); }
 function save() { emit("save", { ...form.value, name: form.value.name.trim() }); }
 function headingLabel(level: string) { return level === "h1" ? "一级标题" : "二级标题"; }
 
-watch(() => props.rule, () => reset(), { immediate: true });
+watch(() => [props.rule, props.draft], () => reset(), { immediate: true });
 </script>
 
 <style scoped>

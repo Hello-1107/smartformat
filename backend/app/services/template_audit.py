@@ -36,6 +36,96 @@ from app.services.docx_parser import (
 from app.services.revision_copy import is_repairable_format
 
 
+_FORM_FIELD_LABELS = {
+    "序号", "姓名", "性别", "年龄", "民族", "政治面貌", "出生日期", "出生年月",
+    "身份证号", "证件号码", "学号", "班级", "专业", "学院", "学校", "学历", "学位",
+    "籍贯", "户籍所在地", "家庭住址", "现住址", "地址", "邮政编码", "联系电话", "手机号码",
+    "手机号", "电话", "邮箱", "电子邮箱", "单位", "工作单位", "部门", "职务", "岗位",
+    "关系", "称谓", "成员姓名", "家庭成员", "申请人", "负责人", "填表日期", "日期", "备注",
+    "申请理由", "主要经历", "个人简介", "审核意见", "审批意见", "签名", "签字",
+}
+
+
+def _field_label(text: str) -> str | None:
+    value = re.sub(r"\s+", "", text).strip("：:")
+    value = re.sub(r"[（(][^）)]*[）)]$", "", value)
+    return value if value in _FORM_FIELD_LABELS else None
+
+
+def _field_data_type(label: str | None) -> str:
+    if not label:
+        return "text"
+    if label in {"年龄", "序号", "邮政编码"}:
+        return "number"
+    if "日期" in label or "年月" in label:
+        return "date"
+    if label in {"身份证号", "证件号码"}:
+        return "id_number"
+    if label in {"联系电话", "手机号码", "手机号", "电话"}:
+        return "phone"
+    return "text"
+
+
+def _classify_table_fields(blocks: list[TemplateBlock]) -> None:
+    """把表格字段名与样例值分开，避免把张三、20 岁等样例当成固定答案。"""
+    table_blocks = [
+        block for block in blocks
+        if block.kind == "table_cell" and None not in (block.table_index, block.row_index, block.column_index)
+    ]
+    primary_text: dict[tuple[int, int, int], str] = {}
+    for block in table_blocks:
+        key = (block.table_index, block.row_index, block.column_index)
+        if block.text.strip() and key not in primary_text:
+            primary_text[key] = block.text.strip()
+
+    known_labels = {key: _field_label(text) for key, text in primary_text.items()}
+    row_has_labels = {
+        (table, row)
+        for (table, row, _column), label in known_labels.items()
+        if label is not None
+    }
+
+    for block in table_blocks:
+        if not block.text.strip():
+            block.mode = "ignore"
+            block.required = False
+            block.check_format = False
+            continue
+        assert block.table_index is not None and block.row_index is not None and block.column_index is not None
+        key = (block.table_index, block.row_index, block.column_index)
+        own_label = known_labels.get(key)
+        if own_label:
+            block.label = own_label
+            block.mode = "fixed"
+            block.required = True
+            block.data_type = "text"
+            continue
+
+        previous_label = known_labels.get((block.table_index, block.row_index, block.column_index - 1))
+        header_text = primary_text.get((block.table_index, 0, block.column_index))
+        header_label = known_labels.get((block.table_index, 0, block.column_index))
+        if previous_label or (block.row_index > 0 and header_text):
+            label = previous_label or header_label or header_text
+            block.label = str(label)
+            block.mode = "variable"
+            block.required = True
+            block.data_type = _field_data_type(previous_label or header_label)
+        elif (block.table_index, block.row_index) in row_has_labels:
+            block.mode = "variable"
+            block.required = True
+            block.data_type = "text"
+        elif block.row_index == 0:
+            # 无常见字段名时仍按普通表头处理，后续数据行会继承该列名称。
+            block.label = block.text.strip()[:40]
+            block.mode = "fixed"
+            block.required = True
+            block.data_type = "text"
+        else:
+            block.mode = "variable"
+            block.required = True
+            block.data_type = "text"
+
+
 def _paragraph_format(paragraph: Paragraph) -> TemplateParagraphFormat:
     run = _dominant_run(paragraph)
     font = _run_font(run, paragraph) if run is not None else FontInfo()
@@ -137,6 +227,7 @@ def extract_template_configuration(path: str | Path) -> TemplateConfiguration:
             )
         )
 
+    _classify_table_fields(blocks)
     page = _parse_section(doc.sections[0], 0) if doc.sections else None
     return TemplateConfiguration(page=page, table_shapes=table_shapes, blocks=blocks)
 
@@ -150,9 +241,12 @@ def _valid_data_type(value: str, data_type: str) -> bool:
     if data_type == "text":
         return True
     if data_type == "number":
-        return bool(re.fullmatch(r"[-+]?\d+(?:\.\d+)?", text))
+        return bool(re.fullmatch(r"[-+]?\d+(?:\.\d+)?(?:岁)?", text))
     if data_type == "date":
-        return bool(re.fullmatch(r"\d{4}(?:年|[-/.])\d{1,2}(?:月|[-/.])\d{1,2}日?", text))
+        return bool(re.fullmatch(
+            r"(?:\d{4}年\d{1,2}月(?:\d{1,2}日)?|\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?)",
+            text,
+        ))
     if data_type == "id_number":
         return bool(re.fullmatch(r"(?:\d{15}|\d{17}[\dXx])", text))
     if data_type == "phone":
@@ -296,7 +390,7 @@ def review_against_template(template: TemplateConfiguration, document_path: str 
     repairable = sum(1 for issue in issues if issue.repairable)
     total = len(issues)
     return TemplateReviewResult(
-        summary="模板审查通过" if not issues else f"共发现 {total} 项模板差异，其中 {repairable} 项可在确认后修订",
+        summary="表单模板审查通过" if not issues else f"共发现 {total} 项模板差异，其中 {repairable} 项可在确认后修订",
         issues=issues,
         total=total,
         repairable=repairable,

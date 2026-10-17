@@ -52,6 +52,20 @@ def _target_bytes() -> bytes:
     return stream.getvalue()
 
 
+def _person_form_bytes(name: str, age: str, political_status: str) -> bytes:
+    doc = Document()
+    table = doc.add_table(rows=1, cols=6)
+    for cell, value in zip(
+        table.rows[0].cells,
+        ("姓名", name, "年龄", age, "政治面貌", political_status),
+        strict=True,
+    ):
+        cell.text = value
+    stream = io.BytesIO()
+    doc.save(stream)
+    return stream.getvalue()
+
+
 def _upload_template(client, headers, workspace, content: bytes, name="申请模板"):
     response = client.post(
         "/api/template-audits/template",
@@ -169,3 +183,70 @@ def test_unpublished_template_cannot_review(client, auth, workspace) -> None:
     )
     assert response.status_code == 400
     assert "保存发布" in response.json()["detail"]
+
+
+def test_form_labels_are_fixed_but_filled_examples_are_variable(client, auth, workspace) -> None:
+    headers, _ = auth
+    template = _upload_template(
+        client, headers, workspace, _person_form_bytes("张三", "20岁", "群众"), "人员信息表"
+    )
+    blocks = {block["text"]: block for block in template["config"]["blocks"] if block["text"]}
+    assert blocks["姓名"]["mode"] == "fixed"
+    assert blocks["张三"]["mode"] == "variable"
+    assert blocks["张三"]["label"] == "姓名"
+    assert blocks["年龄"]["mode"] == "fixed"
+    assert blocks["20岁"]["mode"] == "variable"
+    assert blocks["20岁"]["data_type"] == "number"
+    assert blocks["政治面貌"]["mode"] == "fixed"
+    assert blocks["群众"]["mode"] == "variable"
+    assert blocks["群众"]["label"] == "政治面貌"
+
+    update_blocks = template["config"]["blocks"]
+    published = client.put(
+        "/api/template-audits/current",
+        json={
+            "workspace_id": workspace,
+            "name": "人员信息表",
+            "check_page": False,
+            "blocks": [{key: block[key] for key in ("id", "label", "mode", "required", "data_type", "check_format")} for block in update_blocks],
+        },
+        headers=headers,
+    )
+    assert published.status_code == 200, published.text
+    uploaded = client.post(
+        "/api/documents",
+        params={"workspace_id": workspace, "filename": "李四.docx"},
+        content=_person_form_bytes("李四", "21", "共青团员"),
+        headers={**headers, "Content-Type": "application/octet-stream"},
+    )
+    reviewed = client.post(
+        "/api/template-audits/reviews",
+        json={"workspace_id": workspace, "document_id": uploaded.json()["id"]},
+        headers=headers,
+    )
+    assert reviewed.status_code == 201, reviewed.text
+    issues = reviewed.json()["issues"]
+    assert not any(issue["category"] == "固定内容" and issue["expected"] in {"张三", "20岁", "群众"} for issue in issues)
+
+    # 已有模板可以重新识别，不需要重新上传；新结果要求用户再次确认发布。
+    update_blocks = published.json()["config"]["blocks"]
+    next(block for block in update_blocks if block["text"] == "张三")["mode"] = "fixed"
+    changed = client.put(
+        "/api/template-audits/current",
+        json={
+            "workspace_id": workspace,
+            "name": "人员信息表",
+            "check_page": False,
+            "blocks": [{key: block[key] for key in ("id", "label", "mode", "required", "data_type", "check_format")} for block in update_blocks],
+        },
+        headers=headers,
+    )
+    assert changed.status_code == 200
+    reanalyzed = client.post(
+        "/api/template-audits/current/reanalyze",
+        params={"workspace_id": workspace}, headers=headers,
+    )
+    assert reanalyzed.status_code == 200, reanalyzed.text
+    refreshed = {block["text"]: block for block in reanalyzed.json()["config"]["blocks"] if block["text"]}
+    assert refreshed["张三"]["mode"] == "variable"
+    assert reanalyzed.json()["is_published"] is False

@@ -90,6 +90,11 @@ export const templateAuditApi = {
       })),
     });
   },
+  reanalyze(workspaceId: number) {
+    return http.post<DocumentTemplate>("/template-audits/current/reanalyze", null, {
+      params: { workspace_id: workspaceId },
+    });
+  },
   activate(workspaceId: number, templateId: number) {
     return http.post<DocumentTemplate>(`/template-audits/versions/${templateId}/activate`, null, {
       params: { workspace_id: workspaceId },

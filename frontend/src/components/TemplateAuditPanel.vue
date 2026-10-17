@@ -2,8 +2,8 @@
   <section class="template-audit">
     <div class="toolbar">
       <div>
-        <h2>当前文档模板</h2>
-        <p>上传填写好的标准样例，再确认哪些区域固定、哪些允许用户填写。</p>
+        <h2>当前表单模板</h2>
+        <p>上传填写好的标准样例，字段名会保留为固定标签，已有填写数据自动视为可变内容。</p>
       </div>
       <el-upload :show-file-list="false" :auto-upload="false" accept=".docx" :on-change="onPickTemplate">
         <el-button type="primary" :loading="uploading">{{ current ? "上传新版本" : "上传模板" }}</el-button>
@@ -24,6 +24,7 @@
           <el-option v-for="item in versions" :key="item.id" :value="item.id" :label="`版本 ${item.version} · ${item.filename}${item.is_active ? '（当前）' : ''}`" />
         </el-select>
         <el-switch v-model="draftCheckPage" active-text="检查页面设置" />
+        <el-button :loading="reanalyzing" @click="reanalyzeFields">重新识别字段</el-button>
         <el-button type="success" :loading="saving" @click="saveConfiguration">保存并发布配置</el-button>
       </div>
 
@@ -43,23 +44,35 @@
 
       <div class="review-toolbar">
         <div>
-          <h2>模板对比审查</h2>
+          <h2>表单模板对比审查</h2>
           <p>左右并列查看标准样例和待审文档，点击问题可同时定位两侧区域。</p>
         </div>
         <el-select :model-value="selectedDocumentId" placeholder="选择待审文档" filterable @change="$emit('select-document', $event)">
           <el-option v-for="doc in documents" :key="doc.id" :label="doc.filename" :value="doc.id" />
         </el-select>
-        <el-button type="primary" :disabled="!selectedDocumentId || !current.is_published" :loading="reviewing" @click="runReview">执行模板审查</el-button>
+        <el-button type="primary" :disabled="!selectedDocumentId || !current.is_published" :loading="reviewing" @click="runReview">执行表单模板审查</el-button>
+      </div>
+
+      <div class="preview-controls">
+        <span>左右同步缩放</span>
+        <el-button aria-label="缩小预览" :disabled="previewZoom === 25" @click="changePreviewZoom(-25)">−</el-button>
+        <el-select v-model="previewZoomMode" aria-label="预览缩放比例">
+          <el-option label="适应宽度" value="fit" />
+          <el-option v-for="value in zoomOptions" :key="value" :label="`${value}%`" :value="String(value)" />
+        </el-select>
+        <el-button aria-label="放大预览" :disabled="previewZoom === 200" @click="changePreviewZoom(25)">＋</el-button>
+        <el-button :disabled="previewZoomMode === 'fit'" @click="previewZoomMode = 'fit'">适应宽度</el-button>
+        <small>放大后可使用横向、纵向滚动条查看完整内容</small>
       </div>
 
       <div class="comparison">
         <div class="preview-column">
           <div class="column-title">标准模板 · v{{ current.version }}</div>
-          <DocPreview :document-id="current.id" :preview-url="`/template-audits/templates/${current.id}/preview`" :focus-paragraph="focusTemplate" focus-kind="template" />
+          <DocPreview :document-id="current.id" :preview-url="`/template-audits/templates/${current.id}/preview`" :focus-paragraph="focusTemplate" focus-kind="template" fit-width :zoom-percent="previewZoom" />
         </div>
         <div class="preview-column">
           <div class="column-title">待审文档 · {{ selectedDocument?.filename || "尚未选择" }}</div>
-          <DocPreview :document-id="selectedDocumentId" :focus-paragraph="focusDocument" focus-kind="content" />
+          <DocPreview :document-id="selectedDocumentId" :focus-paragraph="focusDocument" focus-kind="content" fit-width :zoom-percent="previewZoom" />
         </div>
       </div>
 
@@ -71,7 +84,7 @@
         <el-button v-if="review" link type="danger" @click="deleteReview">删除记录</el-button>
       </div>
 
-      <el-result v-if="review?.compliant" icon="success" title="模板审查通过" sub-title="文档结构、填写规则和已启用的格式检查均符合当前模板" />
+      <el-result v-if="review?.compliant" icon="success" title="表单模板审查通过" sub-title="文档结构、填写规则和已启用的格式检查均符合当前模板" />
       <div v-else-if="review" class="issues">
         <el-alert :title="review.summary" type="warning" :closable="false" show-icon />
         <article v-for="(issue, index) in review.issues" :key="`${review.id}-${index}`" class="issue-card">
@@ -122,13 +135,22 @@ const review = ref<TemplateReview | null>(null);
 const uploading = ref(false);
 const saving = ref(false);
 const reviewing = ref(false);
+const reanalyzing = ref(false);
 const focusTemplate = ref<number | null>(null);
 const focusDocument = ref<number | null>(null);
+const zoomOptions = [25, 50, 75, 100, 125, 150, 175, 200];
+const previewZoomMode = ref("fit");
 let templateGeneration = 0;
 let reviewGeneration = 0;
 
 const visibleBlocks = computed(() => draftBlocks.value.filter(block => block.text.trim()));
 const selectedDocument = computed(() => props.documents.find(doc => doc.id === props.selectedDocumentId) ?? null);
+const previewZoom = computed<number | null>(() => previewZoomMode.value === "fit" ? null : Number(previewZoomMode.value));
+
+function changePreviewZoom(delta: number) {
+  const currentZoom = previewZoom.value ?? 100;
+  previewZoomMode.value = String(Math.min(200, Math.max(25, currentZoom + delta)));
+}
 
 function setCurrent(value: DocumentTemplate | null) {
   current.value = value;
@@ -185,6 +207,21 @@ async function saveConfiguration() {
     ElMessage.success("模板配置已保存并发布");
   } catch (error) { ElMessage.error(errorText(error)); } finally { saving.value = false; }
 }
+async function reanalyzeFields() {
+  if (!current.value || props.workspaceId == null) return;
+  try {
+    await ElMessageBox.confirm("将使用最新识别逻辑重新区分字段名和样例数据，当前尚未保存的配置会被重置。继续吗？", "重新识别表单字段", {
+      type: "warning", confirmButtonText: "重新识别", cancelButtonText: "取消",
+    });
+  } catch { return; }
+  reanalyzing.value = true;
+  try {
+    const response = await templateAuditApi.reanalyze(props.workspaceId);
+    setCurrent(response.data);
+    versions.value = versions.value.map(item => item.id === response.data.id ? response.data : item);
+    ElMessage.success("字段已重新识别，请确认配置后保存并发布");
+  } catch (error) { ElMessage.error(errorText(error)); } finally { reanalyzing.value = false; }
+}
 async function activateVersion(id: number) {
   if (props.workspaceId == null || id === current.value?.id) return;
   try {
@@ -202,21 +239,21 @@ async function runReview() {
     const response = await templateAuditApi.run(props.workspaceId, props.selectedDocumentId);
     reviews.value = [response.data, ...reviews.value];
     review.value = response.data;
-    ElMessage.success(response.data.compliant ? "模板审查通过" : `发现 ${response.data.total} 项模板差异`);
+    ElMessage.success(response.data.compliant ? "表单模板审查通过" : `发现 ${response.data.total} 项模板差异`);
   } catch (error) { ElMessage.error(errorText(error)); } finally { reviewing.value = false; }
 }
 function selectReview(id: number) { review.value = reviews.value.find(item => item.id === id) ?? null; }
 async function deleteReview() {
   if (!review.value) return;
   const id = review.value.id;
-  try { await ElMessageBox.confirm("确认删除这条模板审查记录？", "删除审查记录", { type: "warning" }); }
+  try { await ElMessageBox.confirm("确认删除这条表单模板审查记录？", "删除审查记录", { type: "warning" }); }
   catch { return; }
   try {
     await templateAuditApi.removeReview(id);
     emit("clear-review", id);
     reviews.value = reviews.value.filter(item => item.id !== id);
     review.value = reviews.value[0] ?? null;
-    ElMessage.success("模板审查记录已删除");
+    ElMessage.success("表单模板审查记录已删除");
   } catch (error) { ElMessage.error(errorText(error)); }
 }
 function locateIssue(issue: TemplateIssue) {
@@ -261,5 +298,5 @@ watch(() => props.selectedDocumentId, async () => {
 </script>
 
 <style scoped>
-.template-audit{display:grid;gap:18px}.toolbar,.review-toolbar,.meta-row,.history-row{display:flex;align-items:center;gap:12px}.toolbar,.review-toolbar{justify-content:space-between}.toolbar h2,.review-toolbar h2{margin:0;color:#243552;font-size:17px}.toolbar p,.review-toolbar p{margin:4px 0 0;color:#8793a7;font-size:12px}.meta-row{flex-wrap:wrap;padding:14px;border:1px solid #e5eaf3;border-radius:9px;background:#fafbfe}.meta-row .el-input{max-width:390px}.version-select{width:260px}.config-table small{display:block;margin-top:4px;color:#98a3b6}.text-link{padding:0;border:0;color:#405a9f;background:none;text-align:left;cursor:pointer}.review-toolbar{padding-top:8px;border-top:1px solid #edf0f5}.review-toolbar .el-select{width:260px;margin-left:auto}.comparison{display:grid;grid-template-columns:1fr 1fr;gap:14px}.preview-column{min-width:0;border:1px solid #e5eaf3;border-radius:10px;overflow:hidden}.column-title{padding:10px 14px;color:#495a78;background:#f5f7fb;font-size:12px;font-weight:700}.preview-column :deep(.preview),.preview-column :deep(.placeholder){min-height:390px}.preview-column :deep(.doc-wrap){height:390px;min-height:390px;border:0;border-radius:0}.history-row{padding:10px 12px;border-radius:8px;background:#f7f9fc;color:#65738a;font-size:12px}.history-row .el-select{width:330px}.issues{display:grid;gap:10px}.issue-card{padding:14px;border:1px solid #e7ebf3;border-radius:10px;background:#fff}.issue-head{display:flex;align-items:center;gap:10px}.issue-head strong{margin-right:auto;color:#31415e;font-size:13px}.diff{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:11px}.diff span{padding:10px;border-radius:7px;color:#56657e;background:#f7f9fc;font-size:12px;overflow-wrap:anywhere}.diff b{display:block;margin-bottom:4px;color:#8995a9;font-size:10px}.recommend{padding:9px 11px;margin:9px 0 0;border-left:3px solid #65bd8c;color:#376c50;background:#f0faf5;font-size:12px}.manual-note{margin:9px 0 0;color:#a17045;font-size:12px}@media(max-width:900px){.comparison{grid-template-columns:1fr}.toolbar,.review-toolbar{align-items:stretch;flex-direction:column}.review-toolbar .el-select{width:100%;margin-left:0}.diff{grid-template-columns:1fr}}
+.template-audit{display:grid;gap:18px}.toolbar,.review-toolbar,.meta-row,.history-row{display:flex;align-items:center;gap:12px}.toolbar,.review-toolbar{justify-content:space-between}.toolbar h2,.review-toolbar h2{margin:0;color:#243552;font-size:17px}.toolbar p,.review-toolbar p{margin:4px 0 0;color:#8793a7;font-size:12px}.meta-row{flex-wrap:wrap;padding:14px;border:1px solid #e5eaf3;border-radius:9px;background:#fafbfe}.meta-row .el-input{max-width:390px}.version-select{width:260px}.config-table small{display:block;margin-top:4px;color:#98a3b6}.text-link{padding:0;border:0;color:#405a9f;background:none;text-align:left;cursor:pointer}.review-toolbar{padding-top:8px;border-top:1px solid #edf0f5}.review-toolbar .el-select{width:260px;margin-left:auto}.comparison{display:grid;grid-template-columns:1fr 1fr;gap:14px}.preview-column{min-width:0;border:1px solid #e5eaf3;border-radius:10px;overflow:hidden}.column-title{padding:10px 14px;color:#495a78;background:#f5f7fb;font-size:12px;font-weight:700}.preview-column :deep(.preview),.preview-column :deep(.placeholder){min-height:480px}.preview-column :deep(.doc-wrap){height:min(62vh,620px);min-height:480px;border:0;border-radius:0}.preview-controls{display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 14px;border:1px solid #e5eaf3;border-radius:9px;color:#65738a;background:#f8faff;font-size:12px}.preview-controls .el-select{width:120px}.preview-controls small{margin-left:8px;color:#8b96a9}.history-row{padding:10px 12px;border-radius:8px;background:#f7f9fc;color:#65738a;font-size:12px}.history-row .el-select{width:330px}.issues{display:grid;gap:10px}.issue-card{padding:14px;border:1px solid #e7ebf3;border-radius:10px;background:#fff}.issue-head{display:flex;align-items:center;gap:10px}.issue-head strong{margin-right:auto;color:#31415e;font-size:13px}.diff{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:11px}.diff span{padding:10px;border-radius:7px;color:#56657e;background:#f7f9fc;font-size:12px;overflow-wrap:anywhere}.diff b{display:block;margin-bottom:4px;color:#8995a9;font-size:10px}.recommend{padding:9px 11px;margin:9px 0 0;border-left:3px solid #65bd8c;color:#376c50;background:#f0faf5;font-size:12px}.manual-note{margin:9px 0 0;color:#a17045;font-size:12px}@media(max-width:900px){.comparison{grid-template-columns:1fr}.toolbar,.review-toolbar{align-items:stretch;flex-direction:column}.review-toolbar .el-select{width:100%;margin-left:0}.preview-controls{flex-wrap:wrap}.preview-controls small{width:100%;margin-left:0;text-align:center}.diff{grid-template-columns:1fr}}
 </style>

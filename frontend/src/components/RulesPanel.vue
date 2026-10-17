@@ -23,19 +23,6 @@
       <span>快速示例</span>
       <button v-for="sample in samples" :key="sample.label" type="button" @click="text = sample.text">{{ sample.label }}</button>
     </div>
-    <div v-if="templates.length" class="templates">
-      <span>规范模板</span>
-      <el-tooltip v-for="template in templates" :key="template.id" :content="template.description || '未填写模板说明'" placement="top">
-        <div class="template-item">
-          <button type="button" :disabled="applyingTemplate === template.id" @click="emit('apply-template', template)">
-            {{ applyingTemplate === template.id ? "创建中…" : template.name }}
-          </button>
-          <el-button v-if="template.source === 'workspace'" link type="danger" size="small" class="template-delete" title="删除自定义模板" @click.stop="emit('delete-template', template)">×</el-button>
-        </div>
-      </el-tooltip>
-    </div>
-    <p class="template-hint">可在“编辑规则”中将当前规则存为自己的模板</p>
-
     <el-empty
       v-if="rules.length === 0"
       description="暂无规则"
@@ -60,6 +47,20 @@
         </el-button>
       </li>
     </ul>
+
+    <div class="add-rule">
+      <div class="add-rule-title"><span>添加规则</span><small>选择后可继续编辑，确认创建前不会保存</small></div>
+      <div class="preset-list">
+        <button class="preset-button blank" type="button" @click="emit('add-rule', null)">＋ 空白规则</button>
+        <el-tooltip v-for="template in templates" :key="template.id" :content="template.description || '未填写模板说明'" placement="top">
+          <div class="template-item">
+            <button class="preset-button" type="button" @click="emit('add-rule', template)">{{ template.name }}</button>
+            <el-button v-if="template.source === 'workspace'" link type="danger" size="small" class="template-delete" title="删除自定义模板" @click.stop="emit('delete-template', template)">×</el-button>
+          </div>
+        </el-tooltip>
+      </div>
+      <p class="template-hint">预设会填入正文、标题和页面参数；也可在“编辑规则”中保存自己的预设。</p>
+    </div>
   </div>
 </template>
 
@@ -72,14 +73,13 @@ defineProps<{
   templates: RuleTemplate[];
   modelValue: number | null;
   generating?: boolean;
-  applyingTemplate?: string | null;
 }>();
 
 const emit = defineEmits<{
   (e: "update:modelValue", id: number): void;
   (e: "delete", rule: RuleItem): void;
   (e: "generate", text: string): void;
-  (e: "apply-template", template: RuleTemplate): void;
+  (e: "add-rule", template: RuleTemplate | null): void;
   (e: "delete-template", template: RuleTemplate): void;
 }>();
 
@@ -103,8 +103,8 @@ const samples = [
   margin-top: 8px;
   width: 100%;
 }
-.samples,.templates { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 10px; }.samples span,.templates > span { margin-right: 2px; color: #99a5b9; font-size: 11px; }.samples button,.template-item > button { padding: 3px 7px; border: 1px solid #e1e7f2; border-radius: 12px; color: #647593; background: #fff; font-size: 11px; cursor: pointer; }.samples button:hover,.template-item > button:hover { color: #4162d4; border-color: #b9c9fa; background: #f4f7ff; }.templates { margin-top: 7px; }.template-item > button:disabled { cursor: wait; opacity: .65; }.template-item{display:inline-flex;align-items:center;gap:1px}.template-delete{padding:0 2px!important;font-size:13px!important;line-height:1}
-.template-hint{margin:6px 0 0;color:#97a3b7;font-size:11px;line-height:1.45}
+.samples { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 10px; }.samples span { margin-right: 2px; color: #99a5b9; font-size: 11px; }.samples button { padding: 3px 7px; border: 1px solid #e1e7f2; border-radius: 12px; color: #647593; background: #fff; font-size: 11px; cursor: pointer; }.samples button:hover { color: #4162d4; border-color: #b9c9fa; background: #f4f7ff; }
+.add-rule{padding-top:12px;margin-top:12px;border-top:1px solid #edf1f7}.add-rule-title{display:grid;gap:2px;margin-bottom:8px;color:#566784;font-size:12px;font-weight:700}.add-rule-title small{color:#98a4b7;font-size:10px;font-weight:400;line-height:1.4}.preset-list{display:flex;flex-wrap:wrap;gap:6px}.preset-button{padding:5px 9px;border:1px solid #dfe6f2;border-radius:7px;color:#5f708d;background:#fff;font-size:11px;cursor:pointer}.preset-button:hover{color:#4162d4;border-color:#b9c9fa;background:#f4f7ff}.preset-button.blank{color:#fff;border-color:#5572e5;background:#5572e5}.preset-button.blank:hover{border-color:#4160d2;background:#4160d2}.template-item{display:inline-flex;align-items:center;gap:1px}.template-delete{padding:0 2px!important;font-size:13px!important;line-height:1}.template-hint{margin:7px 0 0;color:#97a3b7;font-size:10px;line-height:1.45}
 .list {
   list-style: none;
   margin: 8px 0 0;

@@ -222,7 +222,7 @@ def create_revised_copy(
         seen_template_keys.add(key)
         review = db.get(TemplateReview, fix.review_id)
         if review is None or review.workspace_id != body.workspace_id or review.document_id != doc.id:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "模板审查记录不存在")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "表单模板审查记录不存在")
         result = TemplateReviewResult.model_validate(review.result_json)
         if not 0 <= fix.issue_index < len(result.issues):
             raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "模板修订项不存在")
@@ -244,7 +244,7 @@ def create_revised_copy(
                 paragraph_index=issue.document_content_index,
                 quote=issue.quote,
                 replacement_text=replacement,
-                category=f"模板审查·{issue.category}",
+                category=f"表单模板审查·{issue.category}",
             )
         )
 
