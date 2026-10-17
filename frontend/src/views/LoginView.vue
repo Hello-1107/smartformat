@@ -1,9 +1,9 @@
 <template>
-  <div class="login-wrap">
-    <div class="backdrop blob-one"></div><div class="backdrop blob-two"></div>
+  <div class="login-wrap" :style="{ backgroundImage: `url(${loginBackground})` }">
+    <div class="image-shade" aria-hidden="true"></div>
     <el-card class="login-card" shadow="never">
       <div class="login-brand"><span class="brand-mark">S</span><div><b>审格式</b><small>SMARTFORMAT</small></div></div>
-      <div class="welcome"><p>AI FORMAT REVIEW</p><h1>让每一份文档<br />都恰到好处。</h1><span>上传 Word 文档，使用智能规则完成高效、准确的格式审查。</span></div>
+      <div class="welcome"><p>AI FORMAT REVIEW</p><h1>{{ mode === "login" ? "欢迎回来" : "创建你的工作空间" }}</h1><span>上传 Word 文档，使用智能规则完成高效、准确的格式审查。</span></div>
       <el-tabs v-model="mode" stretch>
         <el-tab-pane label="登录" name="login" />
         <el-tab-pane label="注册" name="register" />
@@ -54,6 +54,7 @@ import { ElMessage } from "element-plus";
 import { authApi } from "@/api";
 import { errText } from "@/api/http";
 import { useAuthStore } from "@/stores/auth";
+import loginBackground from "@/assets/login-document-review-bg.png";
 
 const router = useRouter();
 const auth = useAuthStore();
@@ -118,20 +119,41 @@ async function submit() {
   min-height: 100vh;
   display: flex;
   align-items: center;
-  justify-content: center;
-  background: radial-gradient(circle at 15% 20%, #edf1ff 0, transparent 32%), linear-gradient(135deg, #f8faff 0%, #edf2fa 100%);
+  justify-content: flex-end;
+  padding: 40px clamp(28px, 7vw, 128px);
+  background-position: center;
+  background-size: cover;
+  background-repeat: no-repeat;
+}
+.image-shade {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, rgba(2, 12, 39, .04) 0%, rgba(2, 12, 39, .08) 47%, rgba(1, 9, 30, .5) 100%);
 }
 .login-card {
   z-index: 1;
-  width: 405px;
-  padding: 6px 8px;
-  border: 1px solid rgba(222, 229, 242, .9);
-  border-radius: 18px;
-  box-shadow: 0 20px 60px rgba(56, 75, 124, .14);
+  width: min(440px, 100%);
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, .72);
+  border-radius: 24px;
+  background: rgba(255, 255, 255, .94);
+  box-shadow: 0 28px 80px rgba(0, 12, 49, .38);
+  backdrop-filter: blur(18px);
 }
-.login-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; color: #172442; }.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; color: #fff; background: linear-gradient(135deg, #5b77f4, #314fd4); box-shadow: 0 5px 13px rgba(59, 82, 205, .28); font-family: Georgia, serif; font-size: 20px; }.login-brand b { display: block; font-size: 16px; }.login-brand small { display: block; margin-top: 1px; color: #92a0b8; font-size: 8px; font-weight: 700; letter-spacing: .13em; }.welcome { margin-bottom: 22px; }.welcome p { margin: 0 0 8px; color: #6680d8; font-size: 10px; font-weight: 800; letter-spacing: .14em; }.welcome h1 { margin: 0; color: #1a2845; font-size: 25px; line-height: 1.26; letter-spacing: -.04em; }.welcome span { display: block; margin-top: 10px; color: #8794aa; font-size: 13px; line-height: 1.65; }
+.login-card :deep(.el-card__body) { padding: 25px 24px; }
+.login-brand { display: flex; align-items: center; gap: 11px; margin-bottom: 30px; color: #172442; }.brand-mark { display: grid; place-items: center; width: 38px; height: 38px; border-radius: 11px; color: #fff; background: linear-gradient(135deg, #6385ff, #284bd2); box-shadow: 0 7px 18px rgba(48, 80, 208, .3); font-family: Georgia, serif; font-size: 21px; }.login-brand b { display: block; font-size: 17px; }.login-brand small { display: block; margin-top: 1px; color: #8290aa; font-size: 8px; font-weight: 800; letter-spacing: .16em; }.welcome { margin-bottom: 24px; }.welcome p { margin: 0 0 8px; color: #5271d8; font-size: 10px; font-weight: 800; letter-spacing: .16em; }.welcome h1 { margin: 0; color: #152442; font-size: 28px; line-height: 1.25; letter-spacing: -.035em; }.welcome span { display: block; margin-top: 10px; color: #77869e; font-size: 13px; line-height: 1.7; }
 .login-card :deep(.el-tabs__header) { margin-bottom: 22px; }.login-card :deep(.el-tabs__nav-wrap::after) { height: 1px; background: #edf0f5; }.login-card :deep(.el-tabs__item.is-active) { color: #4667df; font-weight: 700; }.login-card :deep(.el-input__wrapper) { min-height: 39px; border-radius: 8px; background: #f8faff; box-shadow: 0 0 0 1px #e8edf5 inset; }.login-card :deep(.el-form-item__label) { color: #53627b; font-weight: 600; }
-.backdrop { position: absolute; border-radius: 50%; opacity: .55; filter: blur(1px); }.blob-one { width: 390px; height: 390px; top: -160px; right: -70px; background: radial-gradient(circle, #d9e3ff, transparent 68%); }.blob-two { width: 350px; height: 350px; bottom: -180px; left: -120px; background: radial-gradient(circle, #dbeeff, transparent 67%); }
-.submit { height: 42px; border: 0; border-radius: 8px; background: linear-gradient(135deg, #5f7bf5, #4160dc); box-shadow: 0 7px 16px rgba(65, 96, 220, .22); }
+.submit { height: 44px; border: 0; border-radius: 9px; background: linear-gradient(135deg, #6383f7, #3455d8); box-shadow: 0 8px 18px rgba(50, 82, 211, .27); }
 .submit { width: 100%; }
+@media (max-width: 760px) {
+  .login-wrap { justify-content: center; padding: 22px; background-position: 38% center; }
+  .image-shade { background: rgba(2, 10, 32, .48); }
+  .login-card { width: min(430px, 100%); border-radius: 20px; }
+}
+@media (max-height: 700px) {
+  .login-wrap { align-items: flex-start; overflow-y: auto; padding-top: 24px; padding-bottom: 24px; }
+  .login-brand { margin-bottom: 18px; }
+  .welcome { margin-bottom: 16px; }
+  .welcome span { margin-top: 6px; }
+}
 </style>
