@@ -27,12 +27,15 @@ from app.services.docx_parser import (
     _dominant_run,
     _first_line_indent_chars,
     _heading_level,
-    _line_spacing_multiple,
-    _paragraph_effective_bold_italic,
+    _is_title,
     _paragraph_alignment,
     _parse_section,
     _run_font,
+    _effective_paragraph_value,
+    _line_spacing_value,
 )
+from docx.shared import Length
+from docx.enum.text import WD_LINE_SPACING
 from app.services.revision_copy import is_repairable_format
 
 
@@ -129,12 +132,14 @@ def _classify_table_fields(blocks: list[TemplateBlock]) -> None:
 def _paragraph_format(paragraph: Paragraph) -> TemplateParagraphFormat:
     run = _dominant_run(paragraph)
     font = _run_font(run, paragraph) if run is not None else FontInfo()
-    font = _paragraph_effective_bold_italic(paragraph, font)
     pf = paragraph.paragraph_format
+    spacing = _effective_paragraph_value(paragraph, "line_spacing")
     return TemplateParagraphFormat(
         font=font,
+        fonts=[_run_font(r, paragraph) for r in paragraph.runs if r.text.strip()],
         alignment=_paragraph_alignment(paragraph),
-        line_spacing=_line_spacing_multiple(pf),
+        line_spacing=_line_spacing_value(spacing),
+        line_spacing_kind=("atLeast" if _effective_paragraph_value(paragraph, "line_spacing_rule") == WD_LINE_SPACING.AT_LEAST else "exact") if isinstance(spacing, Length) else "multiple",
         space_before=round(pf.space_before.pt, 2) if pf.space_before is not None else None,
         space_after=round(pf.space_after.pt, 2) if pf.space_after is not None else None,
         first_line_indent_chars=_first_line_indent_chars(paragraph, font.size),
@@ -144,11 +149,11 @@ def _paragraph_format(paragraph: Paragraph) -> TemplateParagraphFormat:
 def _default_mode(paragraph: Paragraph, text: str, *, first_row: bool) -> str:
     if not text.strip():
         return "ignore"
-    if first_row or _heading_level(paragraph) is not None:
+    if first_row or _heading_level(paragraph) is not None or _is_title(paragraph):
         return "fixed"
     if len(text.strip()) <= 50 and text.rstrip().endswith(("：", ":")):
         return "fixed"
-    if _paragraph_alignment(paragraph) is not None and len(text.strip()) <= 40:
+    if _paragraph_alignment(paragraph) in {"center", "right"} and len(text.strip()) <= 40:
         return "fixed"
     return "variable"
 
@@ -273,15 +278,18 @@ def _format_differences(expected: TemplateParagraphFormat, actual: TemplateParag
         ("color", "字体颜色", expected.font.color, actual.font.color, _color_match),
     )
     for field, label, wanted, got, compare in font_fields:
-        if wanted is not None and not compare(got, wanted):
-            pairs.append(("font", field, wanted, got))
+        if wanted is not None:
+            mismatches = [getattr(font, field) for font in (actual.fonts or [actual.font]) if not compare(getattr(font, field), wanted)]
+            if mismatches:
+                pairs.append(("font", field, wanted, mismatches[0]))
     paragraph_fields = (
         ("alignment", expected.alignment, actual.alignment, lambda a, e: a == e),
-        ("line_spacing", expected.line_spacing, actual.line_spacing, lambda a, e: _num_close(a, e, 0.08)),
         ("space_before", expected.space_before, actual.space_before, lambda a, e: _num_close(a, e, 0.5)),
         ("space_after", expected.space_after, actual.space_after, lambda a, e: _num_close(a, e, 0.5)),
         ("first_line_indent_chars", expected.first_line_indent_chars, actual.first_line_indent_chars, lambda a, e: _num_close(a, e, 0.15)),
     )
+    if expected.line_spacing is not None and (expected.line_spacing_kind != actual.line_spacing_kind or not _num_close(actual.line_spacing, expected.line_spacing, 0.08)):
+        pairs.append(("paragraph", "line_spacing", {"kind": expected.line_spacing_kind, "value": expected.line_spacing}, {"kind": actual.line_spacing_kind, "value": actual.line_spacing}))
     for field, wanted, got, compare in paragraph_fields:
         if wanted is not None and not compare(got, wanted):
             pairs.append(("paragraph", field, wanted, got))
@@ -366,6 +374,7 @@ def review_against_template(template: TemplateConfiguration, document_path: str 
                     scope="template", category=category, field=field, expected=wanted, actual=got,
                     message=f"{block.label or block.location}的{field}应与模板一致",
                     paragraph_index=actual.top_level_paragraph_index, paragraph_text=value,
+                    severity="unknown" if got is None else "error",
                 )
                 issues.append(TemplateIssue(
                     category="格式", severity="警告", message=violation.message,
@@ -387,6 +396,16 @@ def review_against_template(template: TemplateConfiguration, document_path: str 
                 format_violation=violation,
             ))
 
+    fixed_locations = {}
+    for block in template.blocks:
+        if block.mode == "fixed" and block.text.strip():
+            fixed_locations.setdefault(_normal_text(block.text), set()).add(block.id)
+    moved_anchor = any(_normal_text(block.text) in fixed_locations and block.id not in fixed_locations[_normal_text(block.text)] for block in target.blocks if block.text.strip())
+    if template_paragraph_count != target_paragraph_count or template.table_shapes != target.table_shapes or moved_anchor:
+        for issue in issues:
+            issue.repairable = False
+            issue.recommended_replacement = None
+        issues.append(TemplateIssue(category="结构", severity="警告", message="文档区域数量或表格结构发生变化，位置映射需人工确认，本次不提供自动修订。"))
     repairable = sum(1 for issue in issues if issue.repairable)
     total = len(issues)
     return TemplateReviewResult(

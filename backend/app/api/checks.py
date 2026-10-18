@@ -1,6 +1,7 @@
 """审查路由：对文档执行规则引擎，产出违规报告。"""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -14,9 +15,13 @@ from app.schemas.check import (
     CheckSummary,
     Violation,
 )
-from app.schemas.document import ParsedDocument
+from app.schemas.document import ParsedDocument, PARSER_VERSION
 from app.schemas.rule import RuleSet
 from app.services.checker import run_check
+from app.services.docx_parser import parse_docx
+from pathlib import Path
+import hashlib
+import json
 
 router = APIRouter(prefix="/checks", tags=["checks"])
 
@@ -31,6 +36,7 @@ def _to_out(check: CheckResult) -> CheckOut:
         violations=[Violation.model_validate(v) for v in check.violations_json],
         summary=CheckSummary.model_validate(check.summary_json),
         created_at=check.created_at,
+        ruleset_snapshot=check.ruleset_snapshot,
     )
 
 
@@ -40,9 +46,16 @@ def _build_check(
     """执行一次确定性审查并返回尚未持久化的结果。"""
     if document.parsed_json is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"文档「{document.filename}」尚未解析")
+    if not Path(document.stored_path).is_file():
+        raise HTTPException(404, "文档文件已丢失")
+    if document.parsed_json.get("parser_version") != PARSER_VERSION:
+        document.parsed_json = parse_docx(document.stored_path).model_dump()
     parsed = ParsedDocument.model_validate(document.parsed_json)
     ruleset = RuleSet.model_validate(rule.ruleset_json)
-    violations, summary = run_check(parsed, ruleset)
+    try:
+        violations, summary = run_check(parsed, ruleset)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
     return CheckResult(
         workspace_id=workspace_id,
         document_id=document.id,
@@ -50,6 +63,8 @@ def _build_check(
         status="done",
         violations_json=[v.model_dump() for v in violations],
         summary_json=summary.model_dump(),
+        ruleset_snapshot={"ruleset": ruleset.model_dump(exclude_none=True), "parser_version": PARSER_VERSION,
+                          "hash": hashlib.sha256(json.dumps(rule.ruleset_json, sort_keys=True).encode()).hexdigest()},
         created_by=user_id,
     )
 
@@ -129,16 +144,23 @@ def run_batch_check_endpoint(
 @router.get("", response_model=list[CheckOut])
 def list_checks(
     workspace_id: int,
+    document_id: int | None = None,
+    before_id: int | None = None,
+    latest_only: bool = False,
+    limit: int = Query(default=100, ge=1, le=200),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[CheckOut]:
     require_membership(db, user, workspace_id)
-    checks = (
-        db.query(CheckResult)
-        .filter(CheckResult.workspace_id == workspace_id)
-        .order_by(CheckResult.created_at.desc(), CheckResult.id.desc())
-        .all()
-    )
+    query = db.query(CheckResult).filter(CheckResult.workspace_id == workspace_id)
+    if document_id is not None:
+        query = query.filter(CheckResult.document_id == document_id)
+    if latest_only:
+        latest = db.query(func.max(CheckResult.id)).filter(CheckResult.workspace_id == workspace_id).group_by(CheckResult.document_id)
+        query = query.filter(CheckResult.id.in_(latest))
+    if before_id is not None:
+        query = query.filter(CheckResult.id < before_id)
+    checks = query.order_by(CheckResult.id.desc()).limit(limit).all()
     return [_to_out(c) for c in checks]
 
 

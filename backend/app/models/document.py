@@ -9,6 +9,7 @@ from app.models.base import TimestampMixin
 
 class Document(Base, TimestampMixin):
     __tablename__ = "documents"
+    __table_args__ = {"sqlite_autoincrement": True}
 
     id: Mapped[int] = mapped_column(primary_key=True)
     workspace_id: Mapped[int] = mapped_column(

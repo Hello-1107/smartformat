@@ -46,7 +46,7 @@ async function locate(documentId, index) {
 const app = createApp({
   render: () => h("main", { style: "max-width:1100px;margin:auto" }, [
     h("div", { style: { display: state.tab === "content" ? "block" : "none" } }, [
-      h(ContentReviewPanel, { workspaceId: 1, document: { id: state.docId, filename: "测试.docx" }, onLocate: locate }),
+      h(ContentReviewPanel, { workspaceId: 1, document: { id: state.docId, filename: "测试.docx" }, acceptedFixes: [], onLocate: locate }),
     ]),
     h("div", { style: { display: state.tab === "preview" ? "block" : "none" } }, [
       h(DocPreview, { documentId: state.docId, focusParagraph: state.index, focusKind: state.kind, active: state.tab === "preview" }),

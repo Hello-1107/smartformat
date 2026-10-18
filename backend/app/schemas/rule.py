@@ -7,31 +7,41 @@ RuleSet 是「自然语言格式要求」与「确定性规则引擎」之间的
 """
 
 from datetime import datetime
-from typing import Literal
+from typing import Literal, Any
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 
 HeadingKey = Literal["h1", "h2", "h3", "h4", "h5", "h6"]
 
 
-class FontRule(BaseModel):
+class RuleModel(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False, extra="forbid")
+
+
+class FontRule(RuleModel):
     """字体约束：name 指中文字体，ascii_name 指西文字体。"""
 
     name: str | None = None
     ascii_name: str | None = None
-    size: float | None = Field(default=None, description="字号，单位 pt")
+    size: float | None = Field(default=None, gt=0, le=400, description="字号，单位 pt")
     bold: bool | None = None
     italic: bool | None = None
-    color: str | None = Field(default=None, description="十六进制 RGB，如 000000")
+    color: str | None = Field(default=None, pattern=r"^[0-9A-Fa-f]{6}$")
+
+    @field_validator("name", "ascii_name", mode="before")
+    @classmethod
+    def optional_font(cls, value: Any) -> Any:
+        return value.strip() or None if isinstance(value, str) else value
 
 
-class ParagraphRule(BaseModel):
+class ParagraphRule(RuleModel):
     """段落约束。"""
 
     alignment: Literal["left", "center", "right", "justify"] | None = None
-    line_spacing: float | None = Field(default=None, description="行距倍数，如 1.5")
-    space_before: float | None = Field(default=None, description="段前间距，单位 pt")
-    space_after: float | None = Field(default=None, description="段后间距，单位 pt")
+    line_spacing: float | None = Field(default=None, gt=0, le=1000)
+    line_spacing_kind: Literal["multiple", "exact", "atLeast"] | None = None
+    space_before: float | None = Field(default=None, ge=0, le=2000)
+    space_after: float | None = Field(default=None, ge=0, le=2000)
     first_line_indent_chars: float | None = Field(
         default=None, description="首行缩进，单位：字符数"
     )
@@ -39,7 +49,7 @@ class ParagraphRule(BaseModel):
     bullet: bool | None = None
 
 
-class PageRule(BaseModel):
+class PageRule(RuleModel):
     """页面约束。"""
 
     paper: str | None = Field(default=None, description="纸张类型，如 A4")
@@ -52,35 +62,59 @@ class PageRule(BaseModel):
     header_distance_cm: float | None = None
     footer_distance_cm: float | None = None
 
+    @model_validator(mode="after")
+    def valid_dimensions(self) -> "PageRule":
+        for key, value in self.model_dump().items():
+            if key == "paper" or value is None:
+                continue
+            if value < 0 or value > 200 or (key in {"width_cm", "height_cm"} and value == 0):
+                raise ValueError("页面尺寸与边距必须在有效范围内")
+        return self
 
-class ScopeRule(BaseModel):
+
+class ScopeRule(RuleModel):
     """某一作用域（正文 / 某级标题）的约束。"""
 
     font: FontRule | None = None
     paragraph: ParagraphRule | None = None
 
 
-class HeadingStructureRule(BaseModel):
+class HeadingStructureRule(RuleModel):
     """标题层级结构约束。"""
 
-    max_level: int | None = Field(default=None, description="允许的最大标题层级，1..6")
+    max_level: int | None = Field(default=None, ge=1, le=6)
     require_numbered: bool | None = Field(
         default=None, description="标题是否必须带编号（如 1. / 1.1）"
     )
 
 
-class RuleSet(BaseModel):
-    name: str
+class RuleSet(RuleModel):
+    name: str = Field(min_length=1, max_length=200)
     description: str | None = None
     body: ScopeRule | None = None
+    title: ScopeRule | None = None
     headings: dict[HeadingKey, ScopeRule] | None = None
     page: PageRule | None = None
     heading_structure: HeadingStructureRule | None = None
 
+    @field_validator("name")
+    @classmethod
+    def clean_name(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("规则名称不能为空")
+        return value.strip()
+
+    def has_constraints(self) -> bool:
+        def contains(value: Any) -> bool:
+            if isinstance(value, dict):
+                return any(contains(v) for k, v in value.items() if k != "line_spacing_kind")
+            return value is not None
+        return any(contains(self.model_dump().get(key)) for key in ("body", "title", "headings", "page", "heading_structure"))
+
 
 class RuleCreate(BaseModel):
     workspace_id: int
-    natural_language: str = Field(min_length=1)
+    natural_language: str = Field(min_length=1, max_length=10000)
     name: str | None = None
 
 

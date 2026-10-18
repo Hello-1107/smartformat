@@ -1,7 +1,7 @@
 <template>
   <section class="dashboard">
     <header class="dashboard-head">
-      <div><p class="eyebrow">WORKSPACE OVERVIEW</p><h3>工作区审查概览</h3><p>按每份文档的最新一次审查结果汇总。</p></div>
+      <div><p class="eyebrow">WORKSPACE OVERVIEW</p><h3>工作区格式审查概览</h3><p>按每份文档的最新格式审查汇总，内容建议在“内容审查”中独立查看。</p></div>
       <el-button type="primary" plain :disabled="documents.length === 0 || rules.length === 0" @click="emit('batch')">批量审查</el-button>
     </header>
     <div class="metrics">

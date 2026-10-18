@@ -11,8 +11,10 @@ from app.schemas.document import FontInfo, ParsedSection
 
 class TemplateParagraphFormat(BaseModel):
     font: FontInfo = Field(default_factory=FontInfo)
+    fonts: list[FontInfo] = Field(default_factory=list)
     alignment: str | None = None
     line_spacing: float | None = None
+    line_spacing_kind: str = "multiple"
     space_before: float | None = None
     space_after: float | None = None
     first_line_indent_chars: float | None = None
@@ -54,6 +56,7 @@ class DocumentTemplateOut(BaseModel):
     size: int
     is_active: bool
     is_published: bool
+    is_review_active: bool = False
     config: TemplateConfiguration
     created_at: datetime
 
@@ -69,6 +72,7 @@ class TemplateBlockUpdate(BaseModel):
 
 class TemplateConfigurationUpdate(BaseModel):
     workspace_id: int
+    template_id: int | None = None
     name: str = Field(min_length=1, max_length=200)
     check_page: bool = True
     blocks: list[TemplateBlockUpdate] = Field(max_length=1500)
@@ -110,6 +114,7 @@ class TemplateReviewResult(BaseModel):
 
 
 class TemplateReviewOut(TemplateReviewResult):
+    template_snapshot: dict | None = None
     id: int
     workspace_id: int
     template_id: int

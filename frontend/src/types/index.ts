@@ -33,9 +33,12 @@ export interface ParsedParagraph {
   text: string;
   style_name: string;
   level: number | null;
+  is_title?: boolean;
+  runs?: { text: string; font: FontInfo }[];
   font: FontInfo;
   alignment: string | null;
   line_spacing: number | null;
+  line_spacing_kind?: "multiple" | "exact" | "atLeast";
   space_before: number | null;
   space_after: number | null;
   first_line_indent_chars: number | null;
@@ -57,6 +60,7 @@ export interface ParsedSection {
 }
 
 export interface ParsedDocument {
+  parser_version?: number;
   filename: string;
   sections: ParsedSection[];
   paragraphs: ParsedParagraph[];
@@ -85,6 +89,7 @@ export interface FontRule {
 export interface ParagraphRule {
   alignment?: Alignment | null;
   line_spacing?: number | null;
+  line_spacing_kind?: "multiple" | "exact" | "atLeast" | null;
   space_before?: number | null;
   space_after?: number | null;
   first_line_indent_chars?: number | null;
@@ -118,6 +123,7 @@ export interface RuleSet {
   name: string;
   description?: string | null;
   body?: ScopeRule | null;
+  title?: ScopeRule | null;
   headings?: Record<string, ScopeRule> | null;
   page?: PageRule | null;
   heading_structure?: HeadingStructureRule | null;
@@ -160,12 +166,16 @@ export interface Violation {
   paragraph_index: number | null;
   paragraph_text: string | null;
   severity: string;
+  section_index?: number | null;
+  run_index?: number | null;
 }
 
 export interface CheckSummary {
   total: number;
   by_category: Record<string, number>;
   compliant: boolean;
+  status?: "pass" | "fail" | "unknown";
+  unknown?: number;
 }
 
 export interface CheckItem {
@@ -177,6 +187,22 @@ export interface CheckItem {
   violations: Violation[];
   summary: CheckSummary;
   created_at: string;
+  ruleset_snapshot?: { ruleset: RuleSet; hash: string; parser_version: number } | null;
+}
+
+export interface StyleCandidate {
+  id: string;
+  scope: string;
+  count: number;
+  examples: string[];
+  paragraph_indexes: number[];
+  style: ScopeRule;
+}
+
+export interface TemplateExtraction {
+  ruleset: RuleSet;
+  candidates: Record<string, StyleCandidate[]>;
+  warnings: string[];
 }
 
 export interface BatchCheckResult {
@@ -194,6 +220,7 @@ export interface ContentIssue {
   reason: string;
   suggestion: string;
   recommended_replacement?: string | null;
+  related_references?: { paragraph_index: number; quote: string }[];
 }
 
 export interface ContentReview {
@@ -220,8 +247,10 @@ export type TemplateDataType = "text" | "number" | "date" | "id_number" | "phone
 
 export interface TemplateParagraphFormat {
   font: FontInfo;
+  fonts?: FontInfo[];
   alignment: string | null;
   line_spacing: number | null;
+  line_spacing_kind?: "multiple" | "exact" | "atLeast";
   space_before: number | null;
   space_after: number | null;
   first_line_indent_chars: number | null;
@@ -256,6 +285,7 @@ export interface DocumentTemplate {
   size: number;
   is_active: boolean;
   is_published: boolean;
+  is_review_active?: boolean;
   config: {
     check_page: boolean;
     page: ParsedSection | null;
@@ -281,6 +311,7 @@ export interface TemplateIssue {
 }
 
 export interface TemplateReview {
+  template_snapshot?: DocumentTemplate | null;
   id: number;
   workspace_id: number;
   template_id: number;

@@ -57,3 +57,33 @@ def test_parse_docx(tmp_path) -> None:
     assert body.font.name == "宋体"
     assert body.font.ascii_name == "Times New Roman"
     assert body.font.size == 12
+
+
+def test_parse_docx_resolves_paragraph_style_formatting(tmp_path) -> None:
+    doc = Document()
+    heading_style = doc.styles["Heading 2"]
+    heading_style.font.size = Pt(15)
+    heading_style.font.bold = True
+    heading_style.element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), "黑体")
+    heading_style.paragraph_format.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    doc.add_heading("二级标题", level=2)
+
+    body_style = doc.styles["Normal"]
+    body_style.font.size = Pt(11)
+    body_style.element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), "宋体")
+    body_style.paragraph_format.line_spacing = 1.25
+    doc.add_paragraph("样式正文")
+
+    path = tmp_path / "style-based.docx"
+    doc.save(path)
+    parsed = parse_docx(path)
+
+    heading = next(item for item in parsed.paragraphs if item.level == 2)
+    body = next(item for item in parsed.paragraphs if item.text == "样式正文")
+    assert heading.font.name == "黑体"
+    assert heading.font.size == 15
+    assert heading.font.bold is True
+    assert heading.alignment == "center"
+    assert body.font.name == "宋体"
+    assert body.font.size == 11
+    assert body.line_spacing == 1.25

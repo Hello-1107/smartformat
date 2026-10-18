@@ -9,15 +9,23 @@ from sqlalchemy import Engine, inspect, text
 
 def apply_compatibility_migrations(engine: Engine) -> None:
     inspector = inspect(engine)
-    if "document_templates" not in inspector.get_table_names():
-        return
-    columns = {column["name"] for column in inspector.get_columns("document_templates")}
-    if "is_published" in columns:
-        return
-
-    default = "FALSE" if engine.dialect.name == "postgresql" else "0"
+    tables = inspector.get_table_names()
     with engine.begin() as connection:
-        connection.execute(text(
-            "ALTER TABLE document_templates "
-            f"ADD COLUMN is_published BOOLEAN NOT NULL DEFAULT {default}"
-        ))
+        if "document_templates" in tables and "is_published" not in {c["name"] for c in inspector.get_columns("document_templates")}:
+            default = "FALSE" if engine.dialect.name == "postgresql" else "0"
+            connection.execute(text("ALTER TABLE document_templates " + f"ADD COLUMN is_published BOOLEAN NOT NULL DEFAULT {default}"))
+        if "check_results" in tables and "ruleset_snapshot" not in {c["name"] for c in inspector.get_columns("check_results")}:
+            connection.execute(text("ALTER TABLE check_results ADD COLUMN ruleset_snapshot JSON"))
+        if "document_templates" in tables and "is_review_active" not in {c["name"] for c in inspector.get_columns("document_templates")}:
+            default = "FALSE" if engine.dialect.name == "postgresql" else "0"
+            connection.execute(text(f"ALTER TABLE document_templates ADD COLUMN is_review_active BOOLEAN NOT NULL DEFAULT {default}"))
+            if "is_active" in {c["name"] for c in inspector.get_columns("document_templates")}:
+                connection.execute(text("UPDATE document_templates SET is_review_active = TRUE WHERE is_active = TRUE AND is_published = TRUE"))
+        # 早期 SQLite 未启用外键；仅清理已删除来源的记录。
+        for table in ("check_results", "content_reviews", "template_reviews"):
+            if table in tables and "documents" in tables:
+                connection.execute(text(f"DELETE FROM {table} WHERE document_id NOT IN (SELECT id FROM documents)"))
+        if "check_results" in tables and "rules" in tables:
+            connection.execute(text("DELETE FROM check_results WHERE rule_id NOT IN (SELECT id FROM rules)"))
+        if "rule_revisions" in tables and "rules" in tables:
+            connection.execute(text("DELETE FROM rule_revisions WHERE rule_id NOT IN (SELECT id FROM rules)"))

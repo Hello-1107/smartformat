@@ -9,9 +9,11 @@ from pathlib import Path
 from urllib.parse import quote
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from fastapi.responses import FileResponse, Response
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, load_only
+from starlette.concurrency import run_in_threadpool
+import uuid
 
 from app.database import get_db
 from app.deps import get_current_user, require_membership
@@ -24,7 +26,7 @@ from app.schemas.document import DocumentDetail, DocumentOut, ParsedDocument
 from app.schemas.revision import RevisedCopyCreate
 from app.schemas.template_audit import TemplateReviewResult
 from app.services.docx_parser import parse_docx
-from app.services.storage import save_upload
+from app.services.storage import save_upload, read_upload, require_storage_quota
 from app.services.document_content import preview_bytes
 from app.services.revision_copy import (
     ContentReplacement,
@@ -64,12 +66,13 @@ async def upload_document(
     require_membership(db, user, workspace_id)
     if not filename.lower().endswith(ALLOWED_SUFFIX):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "仅支持 .docx 文件")
-    content = await request.body()
+    content = await read_upload(request)
+    require_storage_quota(db, workspace_id, len(content))
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "文件为空")
     stored_path, _ = save_upload(content, filename)
     try:
-        parsed = parse_docx(stored_path)
+        parsed = await run_in_threadpool(parse_docx, stored_path)
     except Exception as exc:  # noqa: BLE001 - 解析失败应提示用户而非 500
         Path(stored_path).unlink(missing_ok=True)
         raise HTTPException(
@@ -85,7 +88,12 @@ async def upload_document(
         created_by=user.id,
     )
     db.add(doc)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        Path(stored_path).unlink(missing_ok=True)
+        raise
     db.refresh(doc)
     return _to_detail(doc)
 
@@ -93,14 +101,19 @@ async def upload_document(
 @router.get("", response_model=list[DocumentOut])
 def list_documents(
     workspace_id: int,
+    before_id: int | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[DocumentOut]:
     require_membership(db, user, workspace_id)
     docs = (
         db.query(Document)
+        .options(load_only(Document.id, Document.workspace_id, Document.filename, Document.size, Document.created_at))
         .filter(Document.workspace_id == workspace_id)
-        .order_by(Document.created_at.desc())
+        .filter(Document.id < before_id if before_id is not None else True)
+        .order_by(Document.id.desc())
+        .limit(limit)
         .all()
     )
     return [DocumentOut.model_validate(d) for d in docs]
@@ -279,7 +292,11 @@ def delete_document(
     if doc is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "文档不存在")
     require_membership(db, user, doc.workspace_id)
-    Path(doc.stored_path).unlink(missing_ok=True)
+    original = Path(doc.stored_path)
+    staged = original.with_name(original.name + ".deleting-" + uuid.uuid4().hex)
+    if original.is_file():
+        original.replace(staged)
+    db.query(CheckResult).filter(CheckResult.document_id == doc.id).delete(synchronize_session=False)
     db.query(ContentReview).filter(
         ContentReview.workspace_id == doc.workspace_id,
         ContentReview.document_id == doc.id,
@@ -289,4 +306,11 @@ def delete_document(
         TemplateReview.document_id == doc.id,
     ).delete(synchronize_session=False)
     db.delete(doc)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        if staged.is_file():
+            staged.replace(original)
+        raise
+    staged.unlink(missing_ok=True)

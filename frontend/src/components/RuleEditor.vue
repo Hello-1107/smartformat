@@ -1,131 +1,54 @@
 <template>
   <section class="editor">
-      <header class="editor-head">
-        <div>
-          <p class="eyebrow">RULE CONFIGURATION</p>
-          <h3>{{ rule ? "规则编辑器" : "新建规则" }}</h3>
-          <p>{{ rule ? "修改后将直接作为本次及后续审查的规则，不会再次调用 AI。" : draft ? "已载入所选预设；可修改任意参数，点击创建后才会保存。" : "直接填写并创建格式规则，不会调用 AI。" }}</p>
-        </div>
-        <div class="actions">
-          <el-button v-if="rule" text :disabled="saving" @click="emit('new')">新建规则</el-button>
-          <el-button v-if="rule" text :disabled="saving" @click="emit('save-template', form)">存为模板</el-button>
-          <el-button v-if="rule" text @click="emit('versions')">版本历史</el-button>
-          <el-button text :disabled="saving" @click="reset">还原</el-button>
-          <el-button type="primary" :loading="saving" :disabled="!form.name.trim()" @click="save">{{ rule ? "保存规则" : "创建规则" }}</el-button>
-        </div>
-      </header>
-
-      <el-form label-position="top" class="rule-form">
-        <el-form-item label="规则名称">
-          <el-input v-model="form.name" maxlength="80" show-word-limit />
-        </el-form-item>
-
-        <el-tabs class="editor-tabs">
-          <el-tab-pane label="正文样式" name="body">
-            <div class="form-grid three">
-              <el-form-item label="中文字体"><el-input v-model="form.body!.font!.name" placeholder="例如：宋体" /></el-form-item>
-              <el-form-item label="西文字体"><el-input v-model="form.body!.font!.ascii_name" placeholder="例如：Times New Roman" /></el-form-item>
-              <el-form-item label="字号（pt）"><el-input-number v-model="form.body!.font!.size" :min="1" :max="100" controls-position="right" /></el-form-item>
-              <el-form-item label="对齐方式">
-                <el-select v-model="form.body!.paragraph!.alignment" clearable placeholder="不限制">
-                  <el-option label="左对齐" value="left" /><el-option label="居中" value="center" />
-                  <el-option label="右对齐" value="right" /><el-option label="两端对齐" value="justify" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="行距（倍）"><el-input-number v-model="form.body!.paragraph!.line_spacing" :min="0.5" :max="5" :step="0.1" controls-position="right" /></el-form-item>
-              <el-form-item label="首行缩进（字符）"><el-input-number v-model="form.body!.paragraph!.first_line_indent_chars" :min="0" :max="20" :step="0.5" controls-position="right" /></el-form-item>
-            </div>
-            <div class="switches">
-              <el-switch v-model="form.body!.font!.bold" active-text="正文加粗" :active-value="true" :inactive-value="false" />
-              <el-switch v-model="form.body!.font!.italic" active-text="正文斜体" :active-value="true" :inactive-value="false" />
-            </div>
-          </el-tab-pane>
-
-          <el-tab-pane label="标题样式" name="headings">
-            <div class="heading-grid">
-              <div v-for="level in headingLevels" :key="level" class="heading-card">
-                <strong>{{ headingLabel(level) }}</strong>
-                <label class="heading-field"><small>中文字体</small><el-input v-model="form.headings![level]!.font!.name" placeholder="例如：黑体" /></label>
-                <label class="heading-field"><small>字号（pt）</small><el-input-number v-model="form.headings![level]!.font!.size" :min="1" :max="100" controls-position="right" /></label>
-                <label class="heading-field"><small>对齐方式</small><el-select v-model="form.headings![level]!.paragraph!.alignment" clearable placeholder="不限制"><el-option label="左对齐" value="left" /><el-option label="居中" value="center" /><el-option label="右对齐" value="right" /><el-option label="两端对齐" value="justify" /></el-select></label>
-                <label class="heading-field bold-field"><small>加粗</small><el-switch v-model="form.headings![level]!.font!.bold" :active-value="true" :inactive-value="false" /></label>
-              </div>
-            </div>
-          </el-tab-pane>
-
-          <el-tab-pane label="页面设置" name="page">
-            <div class="form-grid three">
-              <el-form-item label="纸张"><el-select v-model="form.page!.paper" clearable placeholder="不限制"><el-option label="A4" value="A4" /></el-select></el-form-item>
-              <el-form-item label="上边距（cm）"><el-input-number v-model="form.page!.margin_top_cm" :min="0" :max="15" :step="0.1" controls-position="right" /></el-form-item>
-              <el-form-item label="下边距（cm）"><el-input-number v-model="form.page!.margin_bottom_cm" :min="0" :max="15" :step="0.1" controls-position="right" /></el-form-item>
-              <el-form-item label="左边距（cm）"><el-input-number v-model="form.page!.margin_left_cm" :min="0" :max="15" :step="0.1" controls-position="right" /></el-form-item>
-              <el-form-item label="右边距（cm）"><el-input-number v-model="form.page!.margin_right_cm" :min="0" :max="15" :step="0.1" controls-position="right" /></el-form-item>
-            </div>
-          </el-tab-pane>
-        </el-tabs>
-      </el-form>
+    <header><div><small>RULE CONFIGURATION</small><h3>{{ rule ? '规则编辑器' : '新建规则' }}<span v-if="isDirty"> · 未保存</span></h3><p>大标题与一级标题分别配置；空白参数表示不限制。</p></div>
+      <div class="actions"><el-button @click="emit('new')">新建规则</el-button><el-button v-if="rule" @click="emit('save-template', cleaned())">存为模板</el-button><el-button v-if="rule" @click="emit('versions')">版本历史</el-button><el-button @click="reset">还原</el-button><el-button type="primary" :loading="saving" :disabled="!form.name.trim()" @click="emit('save', cleaned())">{{ rule ? '保存规则' : '创建规则' }}</el-button></div>
+    </header>
+    <el-form label-position="top" :disabled="saving">
+      <el-form-item label="规则名称"><el-input v-model="form.name" maxlength="200" /></el-form-item>
+      <el-tabs>
+        <el-tab-pane label="正文样式"><ScopeFields :value="form.body!" /></el-tab-pane>
+        <el-tab-pane label="大标题"><ScopeFields :value="form.title!" /></el-tab-pane>
+        <el-tab-pane label="各级标题"><div v-for="level in levels" :key="level" class="heading-card"><h4>{{ level.slice(1) }} 级标题</h4><ScopeFields :value="form.headings![level]!" /></div></el-tab-pane>
+        <el-tab-pane label="页面与结构">
+          <div class="grid"><label>纸张<el-select v-model="form.page!.paper" clearable placeholder="不限制"><el-option v-for="paper in ['A4','A3','A5','Letter','Legal']" :key="paper" :value="paper" /></el-select></label>
+          <label v-for="field in pageFields" :key="field.key">{{ field.label }}（cm）<el-input-number v-model="form.page![field.key]" :min="0" :max="200" :step="0.1" controls-position="right" /></label>
+          <label>最大标题层级<el-input-number v-model="form.heading_structure!.max_level" :min="1" :max="6" /></label>
+          <label>标题必须编号<el-select v-model="form.heading_structure!.require_numbered" clearable placeholder="不限制"><el-option label="是" :value="true" /><el-option label="否" :value="false" /></el-select></label></div>
+        </el-tab-pane>
+      </el-tabs>
+    </el-form>
   </section>
 </template>
-
 <script setup lang="ts">
-import { ref, watch } from "vue";
-import type { RuleItem, RuleSet, ScopeRule } from "@/types";
-
+import { computed, onBeforeUnmount, onMounted, ref, toRaw, watch } from 'vue';
+import ScopeFields from './ScopeFields.vue';
+import type { RuleItem, RuleSet, ScopeRule } from '@/types';
 const props = defineProps<{ rule: RuleItem | null; draft?: RuleSet | null; saving?: boolean }>();
-const emit = defineEmits<{
-  (e: "save", ruleset: RuleSet): void;
-  (e: "save-template", ruleset: RuleSet): void;
-  (e: "versions"): void;
-  (e: "new"): void;
-}>();
-
-type EditableRuleSet = RuleSet & { body: ScopeRule; headings: Record<string, ScopeRule>; page: NonNullable<RuleSet["page"]> };
-const headingLevels = ["h1", "h2"];
-const form = ref<EditableRuleSet>(emptyForm());
-
-function scope(scope?: ScopeRule | null): ScopeRule {
-  return {
-    font: { name: null, ascii_name: null, size: null, bold: null, italic: null, color: null, ...scope?.font },
-    paragraph: { alignment: null, line_spacing: null, space_before: null, space_after: null, first_line_indent_chars: null, numbered: null, bullet: null, ...scope?.paragraph },
-  };
+const emit = defineEmits<{(e:'new'):void;(e:'save', value:RuleSet):void;(e:'save-template',value:RuleSet):void;(e:'versions'):void}>();
+const levels = ['h1','h2','h3','h4','h5','h6'];
+const pageFields = [{key:'width_cm',label:'页面宽度'},{key:'height_cm',label:'页面高度'},{key:'margin_top_cm',label:'上边距'},{key:'margin_bottom_cm',label:'下边距'},{key:'margin_left_cm',label:'左边距'},{key:'margin_right_cm',label:'右边距'},{key:'header_distance_cm',label:'页眉距离'},{key:'footer_distance_cm',label:'页脚距离'}] as const;
+const form = ref<RuleSet>({name:'自定义格式规则'});
+const baseline = ref('');
+function scope(value?: ScopeRule | null): ScopeRule {
+  return {font:{name:null,ascii_name:null,size:null,bold:null,italic:null,color:null,...value?.font}, paragraph:{alignment:null,line_spacing:null,line_spacing_kind:'multiple',space_before:null,space_after:null,first_line_indent_chars:null,numbered:null,bullet:null,...value?.paragraph}};
 }
-
-function emptyForm(rule?: RuleSet): EditableRuleSet {
-  return {
-    ...rule,
-    name: rule?.name ?? "未命名规则",
-    body: scope(rule?.body),
-    headings: { h1: scope(rule?.headings?.h1), h2: scope(rule?.headings?.h2), ...Object.fromEntries(Object.entries(rule?.headings ?? {}).map(([key, value]) => [key, scope(value)])) },
-    page: { paper: null, width_cm: null, height_cm: null, margin_top_cm: null, margin_bottom_cm: null, margin_left_cm: null, margin_right_cm: null, header_distance_cm: null, footer_distance_cm: null, ...rule?.page },
-  };
+function reset() {
+  const source = structuredClone(toRaw(props.rule?.ruleset ?? props.draft ?? {name:'自定义格式规则'}));
+  form.value = {...source,body:scope(source.body),title:scope(source.title),headings:Object.fromEntries(levels.map(level=>[level,scope(source.headings?.[level])])),page:{...source.page},heading_structure:{...source.heading_structure}};
+  baseline.value = JSON.stringify(form.value);
 }
-
-function reset() { form.value = emptyForm(props.rule?.ruleset ?? props.draft ?? undefined); }
-function save() { emit("save", { ...form.value, name: form.value.name.trim() }); }
-function headingLabel(level: string) { return level === "h1" ? "一级标题" : "二级标题"; }
-
-watch(() => [props.rule, props.draft], () => reset(), { immediate: true });
+function cleaned(): RuleSet {
+  const value = JSON.parse(JSON.stringify(form.value), (_key, item) => item === '' ? null : item) as RuleSet;
+  value.name = form.value.name.trim();
+  return value;
+}
+const isDirty = computed(()=>JSON.stringify(form.value)!==baseline.value);
+defineExpose({isDirty});
+watch(()=>JSON.stringify({id:props.rule?.id,ruleset:props.rule?.ruleset,draft:props.draft}),reset,{immediate:true});
+function beforeUnload(event: BeforeUnloadEvent) { if(isDirty.value){event.preventDefault();event.returnValue='';} }
+onMounted(()=>window.addEventListener('beforeunload',beforeUnload));
+onBeforeUnmount(()=>window.removeEventListener('beforeunload',beforeUnload));
 </script>
-
 <style scoped>
-.editor { min-height: 460px; }
-.editor-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding-bottom: 18px; border-bottom: 1px solid #edf1f7; }
-.eyebrow { margin: 0 0 4px; color: #6b7ea8; font-size: 10px; font-weight: 800; letter-spacing: .12em; }
-h3 { margin: 0; color: #16213b; font-size: 18px; }
-.editor-head p:not(.eyebrow) { margin: 7px 0 0; color: #8290a8; font-size: 13px; }
-.actions { display: flex; flex-shrink: 0; gap: 4px; }
-.rule-form { padding-top: 18px; }
-.editor-tabs :deep(.el-tabs__nav-wrap::after) { height: 1px; background: #edf1f7; }
-.form-grid { display: grid; gap: 0 16px; padding: 18px 2px 4px; }
-.form-grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.form-grid :deep(.el-input-number), .form-grid :deep(.el-select) { width: 100%; }
-.switches { display: flex; gap: 28px; padding: 5px 2px 18px; }
-.heading-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 520px), 1fr)); gap: 14px; padding: 18px 2px; }
-.heading-card { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); min-width: 0; gap: 12px; padding: 14px; border: 1px solid #e7ecf5; border-radius: 10px; background: #fbfcff; }
-.heading-card > strong { grid-column: 1 / -1; color: #31415f; font-size: 13px; }
-.heading-field { display: grid; min-width: 0; gap: 6px; }
-.heading-field small { color: #8592a8; font-size: 11px; }
-.heading-field :deep(.el-input-number),.heading-field :deep(.el-select),.heading-field :deep(.el-input){width:100%;min-width:0}.bold-field{align-content:start}.bold-field :deep(.el-switch){justify-self:start}
-@media (max-width: 1180px) { .form-grid.three { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 650px) { .editor-head { display: block; } .actions { flex-wrap:wrap;margin-top: 14px; } .form-grid.three { grid-template-columns: 1fr; } .heading-card { grid-template-columns: 1fr 1fr; } }
+.editor{min-height:460px;color:#31415f}header{display:flex;justify-content:space-between;gap:16px;margin-bottom:20px}header small{color:#8495b0;font-size:10px}h3{margin:5px 0}h3 span{color:#c17d37;font-size:12px}header p{font-size:12px;color:#8693a8}.actions{display:flex;flex-wrap:wrap;gap:5px;align-items:start}.heading-card{padding:12px 16px;margin:12px 0;border:1px solid #e7ecf5;border-radius:10px;background:#fbfcff}.heading-card h4{margin:4px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;padding-top:16px}.grid label{display:grid;gap:6px;font-size:12px}.grid :deep(.el-input-number){width:100%}@media(max-width:760px){header{flex-direction:column}}
 </style>

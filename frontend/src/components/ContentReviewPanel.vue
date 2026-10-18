@@ -5,16 +5,18 @@
       <el-button type="primary" :disabled="!document || historyLoading" :loading="running" @click="run">用 DeepSeek 审查内容</el-button>
     </header>
     <p class="notice">点击审查将把正文和表格文字发送给 DeepSeek，检查措辞、语法、逻辑与一致性。建议需人工确认，不自动修改原文。</p>
+    <el-checkbox v-model="chunked" :disabled="running">长文分段审查（最多 60000 字符，将产生多次模型请求；跨段复核基于节选）</el-checkbox>
     <el-input v-model="instructions" type="textarea" :rows="2" maxlength="1000" show-word-limit :disabled="running" placeholder="可选：补充审查重点，例如：关注前后数据是否矛盾、表达是否适合学术论文。" />
-    <p class="scope">范围：正文与表格；不含页眉页脚、图片、文本框和已删除修订。单次最多 30000 字符、1500 个非空段落，最多列出 50 条建议。</p>
-    <el-alert v-if="running" title="正在审查，请稍候。通常需要几十秒，最长约两分钟。" type="info" :closable="false" show-icon />
+    <p class="scope">范围：正文与表格；不含页眉页脚、图片、文本框和已删除修订。{{ chunked ? '分段模式最多 60000 字符、3000 个非空段落。' : '单次最多 30000 字符、1500 个非空段落。' }}最多列出 50 条建议。</p>
+    <el-alert v-if="running" :title="chunked ? '正在分段审查并复核节选，可能需要数分钟。' : '正在审查，请稍候，最长约两分钟。'" type="info" :closable="false" show-icon />
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
     <div v-if="history.length" class="history">
-      <span>审查历史（最近 50 次）</span>
+      <span>审查历史</span>
       <el-select v-model="selectedId" :disabled="running" aria-label="内容审查历史">
         <el-option v-for="item in history" :key="item.id" :value="item.id" :label="date(item.created_at) + ' · ' + item.issues.length + ' 条建议'" />
       </el-select>
       <el-button link type="danger" :disabled="running || !current" @click="removeCurrent">删除本次</el-button>
+      <el-button v-if="hasMore" link :loading="historyLoading" :disabled="running" @click="loadMore">加载更早记录</el-button>
     </div>
     <div v-if="current" class="result">
       <h4>发现 {{ current.issues.length }} 条修改建议</h4>
@@ -31,6 +33,7 @@
           <el-button v-else link type="success" @click="acceptIssue(issue, index)">接纳并修订</el-button>
         </div>
         <button class="quote" type="button" title="点击定位到原文段落" @click="emit('locate', current.document_id, issue.paragraph_index)">{{ issue.quote }}</button>
+        <button v-for="reference in issue.related_references" :key="`${reference.paragraph_index}-${reference.quote}`" class="quote" @click="emit('locate', current.document_id, reference.paragraph_index)">关联依据 · 段落 {{ reference.paragraph_index + 1 }}：{{ reference.quote }}</button>
         <p><b>问题：</b>{{ issue.reason }}</p>
         <p class="suggestion"><b>建议：</b>{{ issue.suggestion }}</p>
         <p v-if="replacementCandidate(issue)" class="recommended"><b>推荐修订文本：</b>{{ replacementCandidate(issue) }}</p>
@@ -43,12 +46,13 @@
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, watch } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage } from "element-plus/es/components/message/index";
+import { ElMessageBox } from "element-plus/es/components/message-box/index";
 import { contentReviewApi } from "@/api";
 import { errText } from "@/api/http";
 import type { ContentIssue, ContentRepairFix, ContentReview, DocumentItem } from "@/types";
 
-const props = defineProps<{ workspaceId: number | null; document: DocumentItem | null; acceptedFixes: ContentRepairFix[] }>();
+const props = withDefaults(defineProps<{ workspaceId: number | null; document: DocumentItem | null; acceptedFixes?: ContentRepairFix[] }>(), { acceptedFixes: () => [] });
 const emit = defineEmits<{
   (e: "locate", documentId: number, paragraphIndex: number): void;
   (e: "accept", fix: ContentRepairFix): void;
@@ -56,13 +60,16 @@ const emit = defineEmits<{
   (e: "clear-review", reviewId: number): void;
 }>();
 const instructions = ref(""); const history = ref<ContentReview[]>([]);
+const chunked = ref(false);
 const selectedId = ref<number | null>(null); const running = ref(false);
 const historyLoading = ref(false); const error = ref("");
+const hasMore=ref(false);
 const current = computed(() => history.value.find(item => item.id === selectedId.value) ?? null);
 let generation = 0;
 
 watch([() => props.workspaceId, () => props.document?.id], async () => {
   const request = ++generation;
+  chunked.value=false;
   history.value = []; selectedId.value = null; running.value = false; error.value = ""; instructions.value = "";
   const workspaceId = props.workspaceId; const documentId = props.document?.id;
   historyLoading.value = false;
@@ -71,22 +78,27 @@ watch([() => props.workspaceId, () => props.document?.id], async () => {
   try {
     const response = await contentReviewApi.list(workspaceId, documentId);
     if (request !== generation) return;
-    history.value = response.data;
-    selectedId.value = response.data[0]?.id ?? null;
+    history.value = [...new Map([...history.value, ...response.data].map(item => [item.id, item])).values()].sort((a,b) => b.id-a.id);
+    hasMore.value=response.data.length===50;
+    if (selectedId.value == null) selectedId.value = history.value[0]?.id ?? null;
   } catch (e) { if (request === generation) error.value = errText(e); }
   finally { if (request === generation) historyLoading.value = false; }
-}, { immediate: true });
+}, { immediate: true, flush: 'sync' });
 
-async function run() {
-  if (props.workspaceId == null || !props.document || running.value) return;
+async function run(): Promise<boolean> {
+  if (props.workspaceId == null || !props.document || running.value) return false;
   const request = generation;
   running.value = true; error.value = "";
   try {
-    const response = await contentReviewApi.run(props.workspaceId, props.document.id, instructions.value.trim());
-    if (request !== generation) return;
-    history.value = [response.data, ...history.value].slice(0, 50);
+    const response = await contentReviewApi.run(props.workspaceId, props.document.id, instructions.value.trim(), chunked.value);
+    if (request !== generation) return false;
+    history.value = [response.data, ...history.value];
     selectedId.value = response.data.id;
-  } catch (e) { if (request === generation) error.value = errText(e); }
+    return true;
+  } catch (e) {
+    if (request === generation) error.value = errText(e);
+    return false;
+  }
   finally { if (request === generation) running.value = false; }
 }
 async function removeCurrent() {
@@ -111,6 +123,12 @@ async function removeCurrent() {
     if (request === generation) error.value = errText(e);
   }
 }
+async function loadMore(){
+  if(props.workspaceId==null || !props.document || historyLoading.value || running.value || !history.value.length)return;
+  const request=generation;historyLoading.value=true;
+  try{const response=await contentReviewApi.list(props.workspaceId,props.document.id,Math.min(...history.value.map(item=>item.id)));if(request!==generation)return;history.value=[...new Map([...history.value,...response.data].map(item=>[item.id,item])).values()].sort((a,b)=>b.id-a.id);hasMore.value=response.data.length===50;}
+  catch(e){if(request===generation)error.value=errText(e);}finally{if(request===generation)historyLoading.value=false;}
+}
 function acceptedFix(issueIndex: number): ContentRepairFix | undefined {
   return props.acceptedFixes.find(fix => fix.review_id === current.value?.id && fix.issue_index === issueIndex);
 }
@@ -126,6 +144,7 @@ function replacementCandidate(issue: ContentIssue): string | null {
 }
 async function acceptIssue(issue: ContentIssue, issueIndex: number) {
   const review = current.value;
+  const request = generation;
   if (!review) return;
   try {
     const { value } = await ElMessageBox.prompt(
@@ -140,12 +159,13 @@ async function acceptIssue(issue: ContentIssue, issueIndex: number) {
         cancelButtonText: "取消",
       },
     );
-    emit("accept", { review_id: review.id, issue_index: issueIndex, replacement_text: value.trim() });
+    if (request === generation && current.value?.id === review.id) emit("accept", { review_id: review.id, issue_index: issueIndex, replacement_text: value.trim() });
   } catch {
     // 用户取消时不改变接纳状态。
   }
 }
 onBeforeUnmount(() => { generation++; });
+defineExpose({ run, running });
 function date(value: string) {
   return new Date(/[Zz]|[+-]\d{2}:\d{2}$/.test(value) ? value : value + "Z").toLocaleString("zh-CN");
 }

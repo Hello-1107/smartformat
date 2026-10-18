@@ -12,7 +12,6 @@
 
 <script setup lang="ts">
 import { nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { renderAsync } from "docx-preview";
 import http from "@/api/http";
 
 const props = withDefaults(defineProps<{
@@ -63,10 +62,12 @@ async function render() {
   if (!el || documentId == null || request !== renderRequest) return;
   el.replaceChildren();
   try {
+    if(!props.active){loading.value=false;return;}
     const response = await http.get(props.previewUrl || "/documents/" + documentId + "/preview", { responseType: "blob", signal });
     if (request !== renderRequest) return;
     // 每次请求使用独立容器，过期的异步渲染不能覆盖当前文档。
     const stage = document.createElement("div");
+    const { renderAsync } = await import("docx-preview");
     await renderAsync(response.data as Blob, stage, undefined, { useBase64URL: true });
     if (request !== renderRequest) return;
     el.replaceChildren(...Array.from(stage.childNodes));
@@ -107,7 +108,7 @@ onMounted(() => {
   if (container.value) resizeObserver.observe(container.value);
   void render();
 });
-watch(() => [props.documentId, props.previewUrl], () => { void render(); });
+watch(() => [props.documentId, props.previewUrl, props.active], () => { if(props.active && loadedDocument === props.documentId) void locate(); else void render(); });
 watch(() => [props.focusParagraph, props.focusKind, props.active], () => { void locate(); }, { flush: "post" });
 watch(() => [props.fitWidth, props.zoomPercent], async () => { await nextTick(); applyFitWidth(); });
 onBeforeUnmount(() => { renderRequest++; controller?.abort(); resizeObserver?.disconnect(); });

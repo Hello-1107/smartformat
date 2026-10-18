@@ -39,36 +39,41 @@ JSON 结构如下（所有字段都可选，键名必须完全一致）：
 1. 只输出 JSON 对象，不要输出 Markdown 代码块或任何解释文字。
 2. 用户说的「正文」「正文字体」对应 body；「一级标题」对应 h1，以此类推。
 3. 字号单位统一为 pt（磅）；「小四」=12pt，「四号」=14pt，「小三」=15pt，「三号」=16pt，「小二」=18pt，「二号」=22pt。
-4. 行距统一为倍数（如「1.5 倍行距」→ 1.5，「固定值 22 磅」→ 换算约 1.83）。
+4. 行距保留类型：line_spacing_kind 为 multiple/exact/atLeast，line_spacing 存倍率或磅数；固定 22 磅为 exact、22，不能换算成倍数。
 5. 页边距单位统一为 cm（厘米）；「上下 2.54cm、左右 3.17cm」等直接转数字。
 6. 颜色转成 6 位十六进制 RRGGBB（如「黑色」=000000，「红色」=FF0000）。
 7. 用户没提到的约束不要编造，对应字段省略。
+8. 文档大标题对应独立 title，结构与 body 相同；一级标题仍为 headings.h1。
 """
 
 def _client() -> OpenAI:
     return OpenAI(
         api_key=settings.deepseek_api_key,
         base_url=settings.deepseek_base_url,
+        timeout=120.0,
+        max_retries=0,
     )
 
 
 def extract_ruleset(natural_language: str) -> RuleSet:
     """调用 DeepSeek 提取规则，失败时抛出异常（由 API 层转成 502）。"""
-    client = _client()
-    response = client.chat.completions.create(
-        model=settings.deepseek_model,
-        temperature=0,
-        response_format={"type": "json_object"},
-        messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": natural_language},
-        ],
-    )
+    if not settings.deepseek_api_key:
+        raise ValueError("请在后端配置 DEEPSEEK_API_KEY")
+    with _client() as client:
+        response = client.chat.completions.create(
+            model=settings.deepseek_model, temperature=0, max_tokens=6000,
+            response_format={"type": "json_object"},
+            messages=[{"role": "system", "content": _SYSTEM_PROMPT}, {"role": "user", "content": natural_language}],
+        )
+    if not response.choices:
+        raise ValueError("规则提取未返回结果，请重试")
     content = (response.choices[0].message.content or "").strip()
+    if response.choices[0].finish_reason != "stop":
+        raise ValueError("规则提取结果不完整，请缩短要求后重试")
     try:
         data = json.loads(content)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"DeepSeek 返回内容不是合法 JSON: {content[:200]}") from exc
+        raise ValueError("DeepSeek 返回了无效规则，请重试") from exc
     ruleset = RuleSet.model_validate(data)
     if not ruleset.name:
         ruleset.name = "未命名规则"

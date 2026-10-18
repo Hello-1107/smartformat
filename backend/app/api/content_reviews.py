@@ -2,7 +2,7 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from openai import APITimeoutError
 from sqlalchemy.orm import Session
 
@@ -12,7 +12,7 @@ from app.deps import get_current_user, require_membership
 from app.models import Document, User
 from app.models.content_review import ContentReview
 from app.schemas.content_review import ContentReviewCreate, ContentReviewOut
-from app.services.deepseek_content import review_content
+from app.services.deepseek_content import review_content, review_content_chunked, validate_chunked
 from app.services.document_content import read_content, validate_content
 
 router = APIRouter(prefix="/content-reviews", tags=["content-reviews"])
@@ -42,11 +42,12 @@ def create_review(
 ) -> ContentReviewOut:
     require_membership(db, user, body.workspace_id)
     doc = _document(db, body.workspace_id, body.document_id)
+    source_path = doc.stored_path
     if not Path(doc.stored_path).is_file():
         raise HTTPException(404, "文档文件已丢失，请重新上传")
     try:
         paragraphs = read_content(doc.stored_path)
-        validate_content(paragraphs)
+        (validate_chunked if body.chunked else validate_content)(paragraphs)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
@@ -54,12 +55,16 @@ def create_review(
     if not settings.deepseek_api_key:
         raise HTTPException(503, "请在后端配置 DEEPSEEK_API_KEY 后使用内容审查")
     try:
-        result = review_content(paragraphs, body.instructions)
+        result = (review_content_chunked if body.chunked else review_content)(paragraphs, body.instructions)
     except APITimeoutError as exc:
         raise HTTPException(504, "DeepSeek 内容审查超时，请稍后重试") from exc
     except Exception as exc:
         # 不将 SDK 错误体、原文或配置泄露给前端。
         raise HTTPException(502, "DeepSeek 审查失败或返回无效的原文引用，请稍后重试") from exc
+    # 审查期间文档可能已被其他会话删除；不能重新写入其历史。
+    from sqlalchemy import select
+    if db.scalar(select(Document.stored_path).where(Document.id == body.document_id, Document.workspace_id == body.workspace_id)) != source_path:
+        raise HTTPException(404, "文档已删除，本次审查结果不再保存")
     item = ContentReview(
         workspace_id=body.workspace_id, document_id=doc.id,
         instructions=body.instructions, model=settings.deepseek_model,
@@ -75,6 +80,7 @@ def create_review(
 @router.get("", response_model=list[ContentReviewOut])
 def list_reviews(
     workspace_id: int, document_id: int,
+    before_id: int | None = None, limit: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[ContentReviewOut]:
@@ -83,7 +89,7 @@ def list_reviews(
     items = db.query(ContentReview).filter(
         ContentReview.workspace_id == workspace_id,
         ContentReview.document_id == document_id,
-    ).order_by(ContentReview.id.desc()).limit(50).all()
+    ).filter(ContentReview.id < before_id if before_id is not None else True).order_by(ContentReview.id.desc()).limit(limit).all()
     return [_out(item) for item in items]
 
 

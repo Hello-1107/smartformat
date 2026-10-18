@@ -20,6 +20,12 @@ class ContentIssue(BaseModel):
     suggestion: str = Field(min_length=1, max_length=3000)
     # 只针对 quote 的具体替换文本；旧记录和不可安全改写的问题可为 None。
     recommended_replacement: str | None = Field(default=None, max_length=3000)
+    related_references: list["ContentReference"] = Field(default_factory=list, max_length=5)
+
+
+class ContentReference(BaseModel):
+    paragraph_index: int = Field(ge=0, strict=True)
+    quote: str = Field(min_length=1, max_length=2000)
 
 
 class ContentReviewResult(BaseModel):
@@ -31,6 +37,7 @@ class ContentReviewCreate(BaseModel):
     workspace_id: int
     document_id: int
     instructions: str = Field(default="", max_length=1000)
+    chunked: bool = False
 
 
 class ContentReviewOut(ContentReviewResult):

@@ -12,7 +12,8 @@ from pathlib import Path
 from zipfile import ZipFile
 
 from docx import Document
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.text.run import Run
 from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt, RGBColor
@@ -82,7 +83,7 @@ _REPAIRABLE_FORMAT_FIELDS = {
 
 def is_repairable_format(violation: Violation) -> bool:
     """供路由和测试复用的确定性修订能力白名单。"""
-    return (violation.category, violation.field) in _REPAIRABLE_FORMAT_FIELDS
+    return violation.severity != "unknown" and (violation.category, violation.field) in _REPAIRABLE_FORMAT_FIELDS
 
 
 def _display(value: object) -> str:
@@ -108,8 +109,13 @@ def _rfonts(run: object):
     return rfonts
 
 
-def _set_font(paragraph: Paragraph, field: str, expected: object) -> None:
-    for run in _runs(paragraph):
+def _set_font(paragraph: Paragraph, field: str, expected: object, run_index: int | None = None) -> None:
+    runs = [r for e in paragraph._p.xpath("./w:r | ./w:hyperlink/w:r") if (r := Run(e, paragraph)).text.strip()]
+    if run_index is not None:
+        if not 0 <= run_index < len(runs):
+            raise RepairError("文字片段已变化，请重新审查")
+        runs = [runs[run_index]]
+    for run in runs or _runs(paragraph):
         if field == "name":
             value = str(expected)
             # 只覆写中文字体，不能借由 font.name 连带覆盖 ASCII 字体。
@@ -154,7 +160,12 @@ def _set_paragraph(paragraph: Paragraph, field: str, expected: object) -> None:
             raise RepairError("未知的段落对齐方式")
         fmt.alignment = value
     elif field == "line_spacing":
-        fmt.line_spacing = float(expected)
+        if isinstance(expected, dict):
+            kind, value = expected["kind"], float(expected["value"])
+            fmt.line_spacing = value if kind == "multiple" else Pt(value)
+            fmt.line_spacing_rule = {"multiple": WD_LINE_SPACING.MULTIPLE, "exact": WD_LINE_SPACING.EXACTLY, "atLeast": WD_LINE_SPACING.AT_LEAST}[kind]
+        else:
+            fmt.line_spacing = float(expected)
     elif field == "space_before":
         fmt.space_before = Pt(float(expected))
     elif field == "space_after":
@@ -165,8 +176,13 @@ def _set_paragraph(paragraph: Paragraph, field: str, expected: object) -> None:
         raise RepairError(f"暂不支持自动修复段落字段「{field}」")
 
 
-def _set_page(doc: Document, field: str, expected: object) -> None:
-    for section in doc.sections:
+def _set_page(doc: Document, field: str, expected: object, section_index: int | None = None) -> None:
+    if section_index is None and len(doc.sections) > 1:
+        raise RepairError("旧报告缺少页面节定位，请重新审查后修订")
+    index = section_index if section_index is not None else 0
+    if not 0 <= index < len(doc.sections):
+        raise RepairError("页面节已变化，请重新审查")
+    for section in [doc.sections[index]]:
         if field == "paper":
             size = _PAGE_SIZES_CM.get(str(expected).lower())
             if size is None:
@@ -198,15 +214,15 @@ def _apply_format_fixes(doc: Document, violations: list[Violation]) -> list[Revi
         if not is_repairable_format(violation):
             raise RepairError(f"「{violation.message}」暂不支持自动修复")
         if violation.category == "page":
-            _set_page(doc, violation.field, violation.expected)
-            location = "所有页面节"
+            _set_page(doc, violation.field, violation.expected, violation.section_index)
+            location = f"页面节 {(violation.section_index or 0) + 1}"
         else:
             index = violation.paragraph_index
             if index is None or not 0 <= index < len(doc.paragraphs):
                 raise RepairError("格式问题缺少可定位的正文段落，无法安全修订")
             paragraph = doc.paragraphs[index]
             if violation.category == "font":
-                _set_font(paragraph, violation.field, violation.expected)
+                _set_font(paragraph, violation.field, violation.expected, violation.run_index)
             elif violation.category == "paragraph":
                 _set_paragraph(paragraph, violation.field, violation.expected)
             else:
@@ -354,6 +370,21 @@ def build_revised_copy(
     """生成内存中的修订副本并附加修订清单，绝不写入或替换源文件。"""
     if not format_violations and not content_fixes:
         raise RepairError("请至少选择一项要修订的问题")
+    seen = {}
+    previous = []
+    for violation in format_violations:
+        key = (violation.category, violation.field, violation.section_index, violation.paragraph_index, violation.run_index)
+        if key in seen and seen[key] != violation.expected:
+            raise RepairError("选中的格式修订存在冲突，请仅保留同一位置的一组期望值")
+        if violation.category == "font":
+            for other in previous:
+                if (other.category == "font" and other.field == violation.field
+                    and other.paragraph_index == violation.paragraph_index
+                    and (other.run_index is None or violation.run_index is None or other.run_index == violation.run_index)
+                    and other.expected != violation.expected):
+                    raise RepairError("整段格式与局部文字的修订要求发生冲突，请选择其中一项")
+        seen[key] = violation.expected
+        previous.append(violation)
     doc = Document(str(source_path))
     entries = _apply_format_fixes(doc, format_violations)
     formatted = BytesIO()

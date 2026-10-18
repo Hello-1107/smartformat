@@ -50,10 +50,11 @@
         <el-select :model-value="selectedDocumentId" placeholder="选择待审文档" filterable @change="$emit('select-document', $event)">
           <el-option v-for="doc in documents" :key="doc.id" :label="doc.filename" :value="doc.id" />
         </el-select>
-        <el-button type="primary" :disabled="!selectedDocumentId || !current.is_published" :loading="reviewing" @click="runReview">执行表单模板审查</el-button>
+        <el-button type="primary" :disabled="!selectedDocumentId || !publishedTemplate" :loading="reviewing" @click="runReview">执行表单模板审查</el-button>
       </div>
 
       <div class="preview-controls">
+        <span v-if="!current.is_published && publishedTemplate">草稿未发布，审查使用已发布 v{{ publishedTemplate.version }}</span>
         <span>左右同步缩放</span>
         <el-button aria-label="缩小预览" :disabled="previewZoom === 25" @click="changePreviewZoom(-25)">−</el-button>
         <el-select v-model="previewZoomMode" aria-label="预览缩放比例">
@@ -67,12 +68,12 @@
 
       <div class="comparison">
         <div class="preview-column">
-          <div class="column-title">标准模板 · v{{ current.version }}</div>
-          <DocPreview :document-id="current.id" :preview-url="`/template-audits/templates/${current.id}/preview`" :focus-paragraph="focusTemplate" focus-kind="template" fit-width :zoom-percent="previewZoom" />
+          <div class="column-title">标准模板 · v{{ review?.template_version ?? current.version }}{{ review && !review.template_snapshot ? '（旧报告未保存配置快照）' : '' }}</div>
+          <DocPreview :active="active" :document-id="comparisonTemplate?.id ?? null" :preview-url="comparisonTemplate ? `/template-audits/templates/${comparisonTemplate.id}/preview` : undefined" :focus-paragraph="focusTemplate" focus-kind="template" fit-width :zoom-percent="previewZoom" />
         </div>
         <div class="preview-column">
           <div class="column-title">待审文档 · {{ selectedDocument?.filename || "尚未选择" }}</div>
-          <DocPreview :document-id="selectedDocumentId" :focus-paragraph="focusDocument" focus-kind="content" fit-width :zoom-percent="previewZoom" />
+          <DocPreview :active="active" :document-id="selectedDocumentId" :focus-paragraph="focusDocument" focus-kind="content" fit-width :zoom-percent="previewZoom" />
         </div>
       </div>
 
@@ -82,9 +83,10 @@
           <el-option v-for="item in reviews" :key="item.id" :value="item.id" :label="`模板 v${item.template_version} · ${formatTime(item.created_at)} · ${item.total} 项问题`" />
         </el-select>
         <el-button v-if="review" link type="danger" @click="deleteReview">删除记录</el-button>
+        <el-button v-if="hasMoreReviews" link :loading="moreLoading" @click="loadMoreReviews">加载更早记录</el-button>
       </div>
 
-      <el-result v-if="review?.compliant" icon="success" title="表单模板审查通过" sub-title="文档结构、填写规则和已启用的格式检查均符合当前模板" />
+      <el-result v-if="review?.compliant" icon="success" title="表单模板审查通过" :sub-title="`文档符合本次审查使用的模板 v${review.template_version}`" />
       <div v-else-if="review" class="issues">
         <el-alert :title="review.summary" type="warning" :closable="false" show-icon />
         <article v-for="(issue, index) in review.issues" :key="`${review.id}-${index}`" class="issue-card">
@@ -107,17 +109,20 @@
 
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
-import { ElMessage, ElMessageBox, type UploadFile } from "element-plus";
+import { ElMessage } from "element-plus/es/components/message/index";
+import { ElMessageBox } from "element-plus/es/components/message-box/index";
+import type { UploadFile } from "element-plus";
 import { templateAuditApi } from "@/api";
 import DocPreview from "@/components/DocPreview.vue";
 import type { DocumentItem, DocumentTemplate, TemplateBlock, TemplateIssue, TemplateRepairFix, TemplateReview } from "@/types";
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   workspaceId: number | null;
   documents: DocumentItem[];
   selectedDocumentId: number | null;
   acceptedFixes: TemplateRepairFix[];
-}>();
+  active?: boolean;
+}>(), {active:true});
 const emit = defineEmits<{
   (e: "select-document", id: number): void;
   (e: "accept", fix: TemplateRepairFix): void;
@@ -132,10 +137,21 @@ const draftName = ref("");
 const draftCheckPage = ref(true);
 const reviews = ref<TemplateReview[]>([]);
 const review = ref<TemplateReview | null>(null);
+const hasMoreReviews=ref(false);const moreLoading=ref(false);
 const uploading = ref(false);
 const saving = ref(false);
 const reviewing = ref(false);
 const reanalyzing = ref(false);
+const activating = ref(false);
+const mutationBusy = computed(() => uploading.value || saving.value || reanalyzing.value || activating.value);
+const historyTemplate = ref<DocumentTemplate | null>(null);
+const publishedTemplate = computed(() => versions.value.find(item=>item.is_published && item.is_review_active) ?? (current.value?.is_published ? current.value : [...versions.value].filter(item=>item.is_published).sort((a,b)=>b.version-a.version)[0] ?? null));
+const comparisonTemplate = computed(() => review.value ? (review.value.template_snapshot ?? historyTemplate.value) : current.value);
+let workspaceEpoch = 0;
+function context(documentId?: number | null) {
+  const epoch = workspaceEpoch;
+  return () => epoch === workspaceEpoch && (documentId === undefined || documentId === props.selectedDocumentId);
+}
 const focusTemplate = ref<number | null>(null);
 const focusDocument = ref<number | null>(null);
 const zoomOptions = [25, 50, 75, 100, 125, 150, 175, 200];
@@ -175,81 +191,109 @@ async function loadTemplate() {
 }
 async function loadReviews() {
   const generation = ++reviewGeneration;
+  reviews.value=[]; review.value=null;
   const workspaceId = props.workspaceId;
   const documentId = props.selectedDocumentId;
   if (workspaceId == null || documentId == null) { reviews.value = []; review.value = null; return; }
   const response = await templateAuditApi.reviews(workspaceId, documentId);
   if (generation !== reviewGeneration) return;
   reviews.value = response.data;
+  hasMoreReviews.value=response.data.length===50;
   review.value = response.data[0] ?? null;
 }
 async function onPickTemplate(file: UploadFile) {
-  if (!file.raw || props.workspaceId == null) return;
+  if (!file.raw || props.workspaceId == null || mutationBusy.value) return;
+  const valid=context(); const workspaceId=props.workspaceId; ++templateGeneration;
   uploading.value = true;
   try {
     const defaultName = file.name.replace(/\.docx$/i, "");
     const { value } = await ElMessageBox.prompt("请输入模板名称", "上传模板版本", { inputValue: defaultName, inputPattern: /\S+/, inputErrorMessage: "名称不能为空" });
-    const response = await templateAuditApi.upload(props.workspaceId, file.raw, value.trim());
+    if(!valid())return;
+    const response = await templateAuditApi.upload(workspaceId, file.raw, value.trim());
+    if(!valid())return;
     setCurrent(response.data);
-    versions.value = (await templateAuditApi.versions(props.workspaceId)).data;
+    const listed = await templateAuditApi.versions(workspaceId);
+    if(!valid())return;
+    versions.value=listed.data;
     ElMessage.success(`模板版本 ${response.data.version} 已上传，请确认区域用途后保存`);
   } catch (error) {
     if (error !== "cancel" && error !== "close") ElMessage.error(errorText(error));
   } finally { uploading.value = false; }
 }
 async function saveConfiguration() {
-  if (!current.value || props.workspaceId == null) return;
+  if (!current.value || props.workspaceId == null || mutationBusy.value) return;
+  const valid=context(); ++templateGeneration;
   saving.value = true;
   try {
-    const response = await templateAuditApi.update(props.workspaceId, draftName.value.trim(), draftCheckPage.value, draftBlocks.value);
+    const response = await templateAuditApi.update(props.workspaceId, draftName.value.trim(), draftCheckPage.value, draftBlocks.value, current.value.id);
+    if(!valid())return;
     setCurrent(response.data);
-    versions.value = versions.value.map(item => item.id === response.data.id ? response.data : item);
+    versions.value = [response.data, ...versions.value.filter(item => item.id !== response.data.id).map(item=>({...item,is_active:false,is_review_active:false}))];
     ElMessage.success("模板配置已保存并发布");
   } catch (error) { ElMessage.error(errorText(error)); } finally { saving.value = false; }
 }
 async function reanalyzeFields() {
-  if (!current.value || props.workspaceId == null) return;
+  if (!current.value || props.workspaceId == null || mutationBusy.value) return;
+  const valid=context(); const workspaceId=props.workspaceId; ++templateGeneration;
   try {
     await ElMessageBox.confirm("将使用最新识别逻辑重新区分字段名和样例数据，当前尚未保存的配置会被重置。继续吗？", "重新识别表单字段", {
       type: "warning", confirmButtonText: "重新识别", cancelButtonText: "取消",
     });
   } catch { return; }
+  if(!valid())return;
   reanalyzing.value = true;
   try {
-    const response = await templateAuditApi.reanalyze(props.workspaceId);
+    const response = await templateAuditApi.reanalyze(workspaceId);
+    if(!valid())return;
     setCurrent(response.data);
-    versions.value = versions.value.map(item => item.id === response.data.id ? response.data : item);
+    versions.value = [response.data, ...versions.value.filter(item => item.id !== response.data.id)];
     ElMessage.success("字段已重新识别，请确认配置后保存并发布");
   } catch (error) { ElMessage.error(errorText(error)); } finally { reanalyzing.value = false; }
 }
 async function activateVersion(id: number) {
-  if (props.workspaceId == null || id === current.value?.id) return;
+  if (props.workspaceId == null || id === current.value?.id || mutationBusy.value) return;
+  const valid=context(); const workspaceId=props.workspaceId; ++templateGeneration;
+  activating.value=true;
   try {
     await ElMessageBox.confirm("切换后，该版本会成为工作区当前模板。继续吗？", "切换模板版本");
-    const response = await templateAuditApi.activate(props.workspaceId, id);
+    if(!valid())return;
+    const response = await templateAuditApi.activate(workspaceId, id);
+    if(!valid())return;
     setCurrent(response.data);
-    versions.value = (await templateAuditApi.versions(props.workspaceId)).data;
+    const listed = await templateAuditApi.versions(workspaceId);
+    if(!valid())return;
+    versions.value=listed.data;
     ElMessage.success(`已切换到模板版本 ${response.data.version}`);
-  } catch (error) { if (error !== "cancel" && error !== "close") ElMessage.error(errorText(error)); }
+  } catch (error) { if (error !== "cancel" && error !== "close" && valid()) ElMessage.error(errorText(error)); } finally {activating.value=false;}
 }
 async function runReview() {
-  if (props.workspaceId == null || props.selectedDocumentId == null) return;
+  if (props.workspaceId == null || props.selectedDocumentId == null || reviewing.value) return;
+  const valid=context(props.selectedDocumentId); ++reviewGeneration;
   reviewing.value = true;
   try {
     const response = await templateAuditApi.run(props.workspaceId, props.selectedDocumentId);
+    if(!valid())return;
     reviews.value = [response.data, ...reviews.value];
     review.value = response.data;
     ElMessage.success(response.data.compliant ? "表单模板审查通过" : `发现 ${response.data.total} 项模板差异`);
   } catch (error) { ElMessage.error(errorText(error)); } finally { reviewing.value = false; }
 }
 function selectReview(id: number) { review.value = reviews.value.find(item => item.id === id) ?? null; }
+async function loadMoreReviews(){
+  if(props.workspaceId==null || props.selectedDocumentId==null || !reviews.value.length || moreLoading.value || reviewing.value)return;
+  const valid=context(props.selectedDocumentId);const generation=reviewGeneration;moreLoading.value=true;
+  try{const response=await templateAuditApi.reviews(props.workspaceId,props.selectedDocumentId,Math.min(...reviews.value.map(item=>item.id)));if(!valid() || generation!==reviewGeneration)return;reviews.value=[...new Map([...reviews.value,...response.data].map(item=>[item.id,item])).values()];hasMoreReviews.value=response.data.length===50;}
+  catch(error){if(valid())ElMessage.error(errorText(error));}finally{moreLoading.value=false;}
+}
 async function deleteReview() {
   if (!review.value) return;
   const id = review.value.id;
+  const valid=context(props.selectedDocumentId);
   try { await ElMessageBox.confirm("确认删除这条表单模板审查记录？", "删除审查记录", { type: "warning" }); }
   catch { return; }
   try {
     await templateAuditApi.removeReview(id);
+    if(!valid())return;
     emit("clear-review", id);
     reviews.value = reviews.value.filter(item => item.id !== id);
     review.value = reviews.value[0] ?? null;
@@ -271,6 +315,7 @@ function toggleFormat(index: number, accepted: boolean) {
 }
 async function acceptText(index: number, issue: TemplateIssue) {
   if (!review.value) return;
+  const valid=context(props.selectedDocumentId); const reviewId=review.value.id;
   const existing = props.acceptedFixes.find(fix => fix.review_id === review.value!.id && fix.issue_index === index)?.replacement_text;
   try {
     const { value } = await ElMessageBox.prompt("请输入仅用于替换问题原文的具体内容", "确认模板修订", {
@@ -278,19 +323,27 @@ async function acceptText(index: number, issue: TemplateIssue) {
       inputPattern: /\S+/, inputErrorMessage: "替换内容不能为空",
       confirmButtonText: "接纳", cancelButtonText: "取消",
     });
-    emit("accept", { review_id: review.value.id, issue_index: index, replacement_text: value });
+    if(valid() && review.value?.id===reviewId) emit("accept", { review_id: reviewId, issue_index: index, replacement_text: value });
   } catch { /* 用户取消 */ }
 }
 function display(value: unknown) {
   if (value == null || value === "") return "（无）";
   return typeof value === "object" ? JSON.stringify(value) : String(value);
 }
-function formatTime(value: string) { return new Date(value).toLocaleString("zh-CN"); }
+function formatTime(value: string) { return new Date(/[Zz]|[+-]\d{2}:\d{2}$/.test(value)?value:value+'Z').toLocaleString("zh-CN"); }
+
+watch(() => review.value, async (value) => {
+  historyTemplate.value=null;
+  if(!value || value.template_snapshot)return;
+  const valid=context(props.selectedDocumentId);
+  try {const response=await templateAuditApi.get(value.template_id);if(valid() && review.value?.id===value.id)historyTemplate.value=response.data;} catch { /* 无法加载时不展示其他版本 */ }
+});
 
 watch(() => props.workspaceId, async () => {
+  workspaceEpoch++; templateGeneration++; reviewGeneration++; setCurrent(null); versions.value=[];
   reviews.value = []; review.value = null;
   try { await loadTemplate(); await loadReviews(); } catch (error) { ElMessage.error(errorText(error)); }
-}, { immediate: true });
+}, { immediate: true, flush:'sync' });
 watch(() => props.selectedDocumentId, async () => {
   focusDocument.value = null;
   try { await loadReviews(); } catch (error) { ElMessage.error(errorText(error)); }

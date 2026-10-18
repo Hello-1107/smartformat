@@ -15,7 +15,8 @@
 
 <script setup lang="ts">
 import { ref, watch } from "vue";
-import { ElMessage, ElMessageBox } from "element-plus";
+import { ElMessage } from "element-plus/es/components/message/index";
+import { ElMessageBox } from "element-plus/es/components/message-box/index";
 import { ruleApi } from "@/api";
 import { errText } from "@/api/http";
 import type { RuleItem, RuleRevision } from "@/types";
@@ -26,15 +27,20 @@ const versions = ref<RuleRevision[]>([]); const loading = ref(false); const rest
 
 async function load() {
   if (!props.rule) return;
+  const ruleId=props.rule.id;
   loading.value = true;
-  try { versions.value = (await ruleApi.revisions(props.rule.id)).data; } catch (error) { ElMessage.error(errText(error)); } finally { loading.value = false; }
+  versions.value=[];
+  try { const response=await ruleApi.revisions(ruleId); if(props.modelValue && props.rule?.id===ruleId)versions.value=response.data; } catch (error) { if(props.rule?.id===ruleId)ElMessage.error(errText(error)); } finally { if(props.rule?.id===ruleId)loading.value = false; }
 }
 async function restore(version: number) {
   if (!props.rule) return;
+  const ruleId=props.rule.id;
   try {
     await ElMessageBox.confirm(`恢复至 v${version} 后会生成新的当前版本，确认继续吗？`, "恢复规则版本", { type: "warning", confirmButtonText: "恢复", cancelButtonText: "取消" });
     restoring.value = version;
-    const rule = (await ruleApi.restoreRevision(props.rule.id, version)).data;
+    if(props.rule?.id!==ruleId || !props.modelValue)return;
+    const rule = (await ruleApi.restoreRevision(ruleId, version)).data;
+    if(props.rule?.id!==ruleId || !props.modelValue)return;
     emit("restored", rule); emit("update:modelValue", false); ElMessage.success(`已恢复至 v${version}`);
   } catch (error) { if (error !== "cancel" && error !== "close") ElMessage.error(errText(error)); } finally { restoring.value = null; }
 }

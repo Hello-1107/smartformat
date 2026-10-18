@@ -61,8 +61,10 @@ def _fonts_equal(actual: str | None, expected: str | None) -> bool:
 
 
 def _num_close(actual: float | None, expected: float | None, tol: float) -> bool:
-    if expected is None or actual is None:
+    if expected is None:
         return True
+    if actual is None:
+        return False
     return abs(actual - expected) <= tol
 
 
@@ -100,7 +102,7 @@ def _add(
             message=message,
             paragraph_index=paragraph.index if paragraph else None,
             paragraph_text=(paragraph.text[:60] if paragraph and paragraph.text else None),
-            severity="error",
+            severity="unknown" if actual is None else "error",
         )
     )
 
@@ -162,12 +164,13 @@ def _check_paragraph(
             f"对齐方式应为「{rule.alignment}」，实际为「{para.alignment or '未设置'}」",
             para,
         )
-    if rule.line_spacing is not None and not _num_close(
+    if rule.line_spacing is not None and (not _num_close(
         para.line_spacing, rule.line_spacing, 0.15
-    ):
+    ) or para.line_spacing_kind != (rule.line_spacing_kind or "multiple")):
         _add(
-            v, scope, "paragraph", "line_spacing", rule.line_spacing, para.line_spacing,
-            f"行距应为 {rule.line_spacing} 倍，实际为 {para.line_spacing} 倍",
+            v, scope, "paragraph", "line_spacing", {"kind": rule.line_spacing_kind or "multiple", "value": rule.line_spacing},
+            {"kind": para.line_spacing_kind, "value": para.line_spacing} if para.line_spacing is not None else None,
+            f"行距应为 {rule.line_spacing}（{rule.line_spacing_kind or 'multiple'}），实际为 {para.line_spacing}（{para.line_spacing_kind}）",
             para,
         )
     if rule.space_before is not None and not _num_close(
@@ -258,7 +261,7 @@ def _check_heading_structure(
             )
     if rule.require_numbered:
         for para in headings:
-            if not re.match(r"^\s*\d", para.text or ""):
+            if not para.numbered and not re.match(r"^\s*(?:\d|[一二三四五六七八九十]+[、.．])", para.text or ""):
                 _add(
                     v, "heading_structure", "heading_structure", "require_numbered",
                     True, False,
@@ -270,6 +273,8 @@ def _check_heading_structure(
 def _resolve_scope(
     para: ParsedParagraph, ruleset: RuleSet
 ) -> tuple[str, ScopeRule] | None:
+    if para.is_title:
+        return ("title", ruleset.title) if ruleset.title is not None else None
     if para.level is not None and ruleset.headings:
         key = f"h{para.level}"
         scope_rule = ruleset.headings.get(key)  # type: ignore[union-attr]
@@ -283,22 +288,46 @@ def _resolve_scope(
 def run_check(parsed: ParsedDocument, ruleset: RuleSet) -> tuple[list[Violation], CheckSummary]:
     """对解析结果执行规则，返回 (违规列表, 汇总)。"""
     violations: list[Violation] = []
+    applicable = False
+    if not ruleset.has_constraints():
+        raise ValueError("规则没有有效检查项，请先配置规则")
 
     if ruleset.page is not None and parsed.sections:
-        _check_page(violations, parsed.sections[0], ruleset.page)
+        applicable = any(value is not None for value in ruleset.page.model_dump().values())
+        for section in parsed.sections:
+            start = len(violations)
+            _check_page(violations, section, ruleset.page)
+            for violation in violations[start:]:
+                violation.section_index = section.index
+                violation.message = f"第 {section.index + 1} 节：{violation.message}"
 
     for para in parsed.paragraphs:
+        if not para.text.strip():
+            continue
         resolved = _resolve_scope(para, ruleset)
         if resolved is None:
             continue
         scope, scope_rule = resolved
+        applicable = applicable or any(value is not None for section in (scope_rule.font, scope_rule.paragraph) if section is not None for key, value in section.model_dump().items() if key != "line_spacing_kind")
         if scope_rule.font is not None:
-            _check_font(violations, scope, para.font, scope_rule.font, para)
+            if para.runs:
+                for index, run in enumerate(para.runs):
+                    start = len(violations)
+                    _check_font(violations, scope, run.font, scope_rule.font, para)
+                    for violation in violations[start:]:
+                        violation.run_index = index
+                        violation.paragraph_text = run.text[:60]
+            else:
+                _check_font(violations, scope, para.font, scope_rule.font, para)
         if scope_rule.paragraph is not None:
             _check_paragraph(violations, scope, para, scope_rule.paragraph)
 
     if ruleset.heading_structure is not None:
+        applicable = applicable or ruleset.heading_structure.max_level is not None or ruleset.heading_structure.require_numbered is True
         _check_heading_structure(violations, parsed, ruleset.heading_structure)
+
+    if not applicable:
+        _add(violations, "coverage", "coverage", "applicable_content", "存在可检查的文档区域", None, "没有匹配到可检查的文档区域，不能确认合规")
 
     summary = _summarize(violations)
     return violations, summary
@@ -310,4 +339,6 @@ def _summarize(violations: list[Violation]) -> CheckSummary:
         total=len(violations),
         by_category=by_category,
         compliant=len(violations) == 0,
+        unknown=sum(v.severity == "unknown" for v in violations),
+        status="pass" if not violations else "unknown" if all(v.severity == "unknown" for v in violations) else "fail",
     )

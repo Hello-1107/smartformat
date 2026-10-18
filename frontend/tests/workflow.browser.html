@@ -1,0 +1,91 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>模板工作流浏览器回归</title><style>body{margin:0}#result{white-space:pre-wrap}</style></head><body><pre id="result">RUNNING</pre><div id="app"></div><div id="candidates"></div>
+<script type="module">
+import {createApp,h,reactive,nextTick} from 'vue';
+import {createPinia} from 'pinia';
+import {createRouter,createMemoryHistory} from 'vue-router';
+import ElementPlus from '/src/ui.ts';import 'element-plus/dist/index.css';
+import HomeView from '/src/views/HomeView.vue';
+import TemplateCandidatesDialog from '/src/components/TemplateCandidatesDialog.vue';
+import RuleEditor from '/src/components/RuleEditor.vue';
+import http from '/src/api/http.ts';
+const errors=[];window.addEventListener('error',event=>errors.push(event.message));window.addEventListener('unhandledrejection',event=>errors.push(String(event.reason)));
+const assert=(ok,message)=>{if(!ok)throw Error(message);};
+async function wait(check){for(let i=0;i<200;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,30));}throw Error('等待界面超时');}
+const standard={id:'system',source:'system',name:'标准样例',description:'离线合成样式',ruleset:{name:'标准样例',body:{font:{size:12}},title:{font:{size:28}},headings:{h1:{font:{size:18}}}}};
+const sampleDocument={id:1,workspace_id:1,filename:'合成提交.docx',size:1000,created_at:'2026-10-18T00:00:00'};
+const sampleRule={id:2,workspace_id:1,name:standard.name,ruleset:standard.ruleset};
+const candidate=(id,scope,size)=>({id,scope,count:1,examples:['合成原文'],paragraph_indexes:[0],style:{font:{size}}});
+const extraction={ruleset:{name:'上传候选规范'},warnings:[],candidates:{title:[candidate('title','title',28)],h1:[candidate('h1a','h1',18),candidate('h1b','h1',16)]}};
+let formatCalls=0;let contentCalls=0;let extractionCalls=0;
+http.defaults.adapter=async config=>{let data=[];
+  if(config.url==='/workspaces')data=[{id:1,name:'合成工作区'}];
+  else if(config.url==='/documents')data=[sampleDocument];
+  else if(config.url==='/rules')data=[sampleRule];
+  else if(config.url==='/rules/templates')data=[standard];
+  else if(config.url==='/rules/document-template-candidates'){extractionCalls++;data=extraction;}
+  else if(config.url==='/checks' && config.method==='post'){formatCalls++;data={id:formatCalls,document_id:1,rule_id:2,created_at:sampleDocument.created_at,summary:{total:0,compliant:true,by_category:{}},violations:[]};}
+  else if(config.url==='/content-reviews' && config.method==='post'){contentCalls++;data={id:contentCalls,document_id:1,created_at:sampleDocument.created_at,summary:'模拟内容审查已完成',issues:[],paragraph_count:1,model:'mock'};}
+  else if(config.url==='/template-audits/current')data=null;
+  return {data,status:200,statusText:'OK',headers:{},config};
+};
+const app=createApp(HomeView).use(createPinia()).use(createRouter({history:createMemoryHistory(),routes:[{path:'/',component:{render:()=>null}}]})).use(ElementPlus);
+app.config.errorHandler=error=>errors.push(String(error));app.mount('#app');
+try{
+  await wait(()=>document.querySelector('.preset-button:not(.blank)'));
+  document.querySelector('.preset-button:not(.blank)').click();
+  await wait(()=>document.querySelector('.editor input')?.value==='标准样例' && document.querySelector('.main-tabs > .el-tabs__header .is-active')?.textContent==='文本模板审查');
+  const tabs=[...document.querySelectorAll('.editor .el-tabs__item')].map(e=>e.textContent);
+  assert(tabs.includes('大标题'),'大标题必须提供独立编辑入口');
+  assert(getComputedStyle(document.querySelector('.left-rail')).display!=='none','小屏幕必须保留文档和规则入口');
+  assert(getComputedStyle(document.querySelector('.workspace-picker')).display!=='none','小屏幕必须保留工作区选择');
+  const mainTabs=[...document.querySelectorAll('.main-tabs > .el-tabs__header .el-tabs__item')];
+  assert(mainTabs.some(e=>e.textContent==='文本模板审查') && mainTabs.some(e=>e.textContent==='表单模板审查'),'两种模板审查必须位于同级主导航');
+  assert(!mainTabs.some(e=>['内容审查','格式审查','模板规则','格式历史'].includes(e.textContent.trim())),'文本审查的内部功能不应作为主导航');
+  assert(document.querySelector('.main-tabs > .el-tabs__header .is-active').textContent==='文本模板审查','创建规则必须进入文本模板审查内部');
+  assert(document.querySelector('.text-review-tabs > .el-tabs__header .is-active').textContent==='模板规则','预设必须在内部规则编辑器中显示');
+  assert(document.querySelector('.review-types').closest('.text-template-review'),'审查功能开关必须在文本模板审查内部');
+  assert(!document.querySelector('.review-bar .review-types') && !document.querySelector('.review-bar .run-button'),'公共顶部不应出现文本审查的类型开关或执行入口');
+  assert(document.querySelector('.text-template-head .el-upload') && !document.querySelector('.left-rail .document-template'),'文本模板上传只应出现在文本模板审查内部');
+  const innerTabs=[...document.querySelectorAll('.text-review-tabs > .el-tabs__header .el-tabs__item')];
+  assert(innerTabs.some(e=>e.textContent==='格式历史'),'格式历史必须在文本模板审查内可访问');
+  innerTabs.find(e=>e.textContent==='内容审查').click();await nextTick();
+  assert(getComputedStyle(document.querySelector('.content-review').parentElement).display!=='none','内容审查子页应可打开');
+  const reviewModes=[...document.querySelectorAll('.review-types input')];
+  reviewModes[0].click();await nextTick();reviewModes[1].click();await nextTick();
+  assert(!document.querySelector('.text-review-actions .run-button').disabled,'没有格式规则时也应能单独审查内容');
+  document.querySelector('.text-review-actions .run-button').click();
+  await wait(()=>document.querySelector('.content-review .result') && !document.querySelector('.text-review-actions .run-button').classList.contains('is-loading'));
+  assert(contentCalls===1 && formatCalls===0,'仅内容模式不得调用格式检查');
+  document.querySelector('.left-rail .rule-name').click();await nextTick();await nextTick();
+  reviewModes[0].click();await nextTick();
+  document.querySelector('.text-review-actions .run-button').click();
+  await wait(()=>document.querySelector('.report .is-pass') && !document.querySelector('.text-review-actions .run-button').classList.contains('is-loading'));
+  assert(contentCalls===2 && formatCalls===1,'双选模式应分别执行格式与内容审查');
+  assert(document.querySelector('.main-tabs > .el-tabs__header .is-active').textContent==='文本模板审查','执行完成不得跳出文本模板审查');
+  const transfer=new DataTransfer();transfer.items.add(new File(['offline mock'],'合成模板.docx'));
+  const uploadInput=document.querySelector('.text-template-head input[type=file]');uploadInput.files=transfer.files;uploadInput.dispatchEvent(new Event('change',{bubbles:true}));
+  await wait(()=>document.querySelector('.candidates input[type=radio]'));
+  assert(extractionCalls===1,'新入口必须连接模板候选提取接口');
+  const uploadRadios=[...document.querySelectorAll('.candidates input[type=radio]')];uploadRadios[0].click();uploadRadios[2].click();await nextTick();
+  document.querySelector('.el-dialog__footer button:last-child').click();
+  await wait(()=>document.querySelector('.editor input')?.value==='上传候选规范');
+  assert(document.querySelector('.main-tabs > .el-tabs__header .is-active').textContent==='文本模板审查','候选确认后必须在内部规则编辑器继续');
+  mainTabs.find(e=>e.textContent==='表单模板审查').click();await nextTick();
+  assert(getComputedStyle(document.querySelector('.text-template-review').parentElement).display==='none','表单模板审查不应展示文本模板审查开关');
+  app.unmount();
+  const state=reactive({extraction:{ruleset:{name:'候选规范'},warnings:[],candidates:{title:[candidate('title','title',28)],h1:[candidate('h1a','h1',18),candidate('h1b','h1',16)]}},confirmed:null});
+  const choices=createApp({render:()=>h('div',[
+    h(TemplateCandidatesDialog,{extraction:state.extraction,onCancel:()=>{},onConfirm:value=>{state.confirmed=value;state.extraction=null;}}),
+    state.confirmed?h(RuleEditor,{rule:null,draft:state.confirmed}):null,
+  ])}).use(ElementPlus);choices.config.errorHandler=error=>errors.push(String(error));choices.mount('#candidates');
+  await wait(()=>document.querySelector('.el-dialog__footer button:last-child'));
+  assert(document.querySelector('.el-dialog__footer button:last-child').disabled,'未选择候选不能确认');
+  const radios=[...document.querySelectorAll('.candidates input[type=radio]')];
+  assert(radios.length===3,'应展示完整候选列表');radios[0].click();radios[2].click();await nextTick();
+  await wait(()=>!document.querySelector('.el-dialog__footer button:last-child').disabled);
+  document.querySelector('.el-dialog__footer button:last-child').click();await nextTick();
+  assert(state.confirmed.title.font.size===28 && state.confirmed.headings.h1.font.size===16,'候选确认不能混合或合并大标题与一级标题');
+  assert(errors.length===0,errors.join('\n'));
+  document.querySelector('#result').textContent='PASS: 同级模板导航、内部格式/内容审查、内部模板上传、预设创建、独立大标题、候选确认、小屏入口、历史入口';choices.unmount();
+}catch(error){document.querySelector('#result').textContent='FAIL: '+error.stack+'\n'+errors.join('\n');}
+</script></body></html>

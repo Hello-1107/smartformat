@@ -2,9 +2,10 @@
 
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.database import get_db
 from app.deps import get_current_user, require_membership
@@ -19,7 +20,7 @@ from app.schemas.template_audit import (
     TemplateReviewResult,
 )
 from app.services.document_content import preview_bytes
-from app.services.storage import save_upload
+from app.services.storage import save_upload, read_upload, require_storage_quota
 from app.services.template_audit import extract_template_configuration, review_against_template
 
 router = APIRouter(prefix="/template-audits", tags=["template-audits"])
@@ -35,6 +36,7 @@ def _template_out(item: DocumentTemplate) -> DocumentTemplateOut:
         size=item.size,
         is_active=item.is_active,
         is_published=item.is_published,
+        is_review_active=item.is_review_active,
         config=TemplateConfiguration.model_validate(item.config_json),
         created_at=item.created_at,
     )
@@ -49,6 +51,7 @@ def _review_out(item: TemplateReview) -> TemplateReviewOut:
         template_version=item.template_version,
         document_id=item.document_id,
         created_at=item.created_at,
+        template_snapshot=item.result_json.get("template_snapshot"),
         **result.model_dump(),
     )
 
@@ -76,6 +79,8 @@ def get_current_template(
 @router.get("/versions", response_model=list[DocumentTemplateOut])
 def list_template_versions(
     workspace_id: int,
+    before_id: int | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[DocumentTemplateOut]:
@@ -83,8 +88,9 @@ def list_template_versions(
     items = (
         db.query(DocumentTemplate)
         .filter(DocumentTemplate.workspace_id == workspace_id)
-        .order_by(DocumentTemplate.version.desc())
-        .limit(20)
+        .filter(DocumentTemplate.id < before_id if before_id is not None else True)
+        .order_by(DocumentTemplate.id.desc())
+        .limit(limit)
         .all()
     )
     return [_template_out(item) for item in items]
@@ -104,12 +110,13 @@ async def upload_template(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "模板仅支持 .docx 文件")
     if not name.strip():
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "模板名称不能为空")
-    content = await request.body()
+    content = await read_upload(request)
+    require_storage_quota(db, workspace_id, len(content))
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "模板文件为空")
     stored_path, _ = save_upload(content, filename)
     try:
-        config = extract_template_configuration(stored_path)
+        config = await run_in_threadpool(extract_template_configuration, stored_path)
     except Exception as exc:  # noqa: BLE001
         Path(stored_path).unlink(missing_ok=True)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"模板解析失败：{exc}") from exc
@@ -122,7 +129,7 @@ async def upload_template(
     db.query(DocumentTemplate).filter(
         DocumentTemplate.workspace_id == workspace_id,
         DocumentTemplate.is_active.is_(True),
-    ).update({DocumentTemplate.is_active: False}, synchronize_session=False)
+    ).update({DocumentTemplate.is_active: False}, synchronize_session="fetch")
     item = DocumentTemplate(
         workspace_id=workspace_id,
         version=(latest.version + 1) if latest else 1,
@@ -136,7 +143,12 @@ async def upload_template(
         created_by=user.id,
     )
     db.add(item)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        Path(stored_path).unlink(missing_ok=True)
+        raise
     db.refresh(item)
     return _template_out(item)
 
@@ -151,6 +163,10 @@ def update_current_template(
     item = _active(db, body.workspace_id)
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "当前工作区尚未上传模板")
+    if body.template_id is not None and body.template_id != item.id:
+        raise HTTPException(409, "当前模板已变化，请刷新后再保存")
+    if item.is_published:
+        item = _new_draft(db, item)
     config = TemplateConfiguration.model_validate(item.config_json)
     existing = {block.id: block for block in config.blocks}
     if set(existing) != {block.id for block in body.blocks}:
@@ -166,6 +182,8 @@ def update_current_template(
     item.name = body.name.strip()
     item.config_json = config.model_dump()
     item.is_published = True
+    db.query(DocumentTemplate).filter(DocumentTemplate.workspace_id == body.workspace_id).update({DocumentTemplate.is_review_active: False}, synchronize_session="fetch")
+    item.is_review_active = True
     db.commit()
     db.refresh(item)
     return _template_out(item)
@@ -190,11 +208,32 @@ def reanalyze_current_template(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"重新识别模板失败：{exc}") from exc
     config.check_page = previous.check_page
+    if item.is_published:
+        item = _new_draft(db, item)
     item.config_json = config.model_dump()
     # 新识别结果必须由用户复核后重新发布，不能静默改变正在使用的审查规则。
     item.is_published = False
     db.commit()
     db.refresh(item)
+    return _template_out(item)
+
+
+def _new_draft(db: Session, source: DocumentTemplate) -> DocumentTemplate:
+    latest = db.query(DocumentTemplate).filter(DocumentTemplate.workspace_id == source.workspace_id).order_by(DocumentTemplate.version.desc()).first()
+    source.is_active = False
+    item = DocumentTemplate(workspace_id=source.workspace_id, version=latest.version + 1,
+        name=source.name, filename=source.filename, stored_path=source.stored_path, size=source.size,
+        is_active=True, is_published=False, config_json=source.config_json, created_by=source.created_by)
+    db.add(item)
+    return item
+
+
+@router.get("/templates/{template_id}", response_model=DocumentTemplateOut)
+def get_template(template_id: int, db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> DocumentTemplateOut:
+    item = db.get(DocumentTemplate, template_id)
+    if item is None:
+        raise HTTPException(404, "模板不存在")
+    require_membership(db, user, item.workspace_id)
     return _template_out(item)
 
 
@@ -214,8 +253,11 @@ def activate_template_version(
     db.query(DocumentTemplate).filter(
         DocumentTemplate.workspace_id == workspace_id,
         DocumentTemplate.is_active.is_(True),
-    ).update({DocumentTemplate.is_active: False}, synchronize_session=False)
+    ).update({DocumentTemplate.is_active: False}, synchronize_session="fetch")
     item.is_active = True
+    if item.is_published:
+        db.query(DocumentTemplate).filter(DocumentTemplate.workspace_id == workspace_id).update({DocumentTemplate.is_review_active: False}, synchronize_session="fetch")
+        item.is_review_active = True
     db.commit()
     db.refresh(item)
     return _template_out(item)
@@ -251,7 +293,9 @@ def create_template_review(
     if template is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "请先上传并确认当前模板")
     if not template.is_published:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "请先在模板配置页确认区域用途并保存发布")
+        template = db.query(DocumentTemplate).filter(DocumentTemplate.workspace_id == body.workspace_id, DocumentTemplate.is_published.is_(True)).order_by(DocumentTemplate.is_review_active.desc(), DocumentTemplate.version.desc()).first()
+        if template is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "请先在模板配置页确认区域用途并保存发布")
     document = db.get(Document, body.document_id)
     if document is None or document.workspace_id != body.workspace_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "待审文档不存在")
@@ -267,7 +311,7 @@ def create_template_review(
         template_id=template.id,
         template_version=template.version,
         document_id=document.id,
-        result_json=result.model_dump(),
+        result_json={**result.model_dump(), "template_snapshot": _template_out(template).model_dump(mode="json")},
         created_by=user.id,
     )
     db.add(review)
@@ -280,6 +324,8 @@ def create_template_review(
 def list_template_reviews(
     workspace_id: int,
     document_id: int,
+    before_id: int | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[TemplateReviewOut]:
@@ -290,8 +336,9 @@ def list_template_reviews(
     items = (
         db.query(TemplateReview)
         .filter(TemplateReview.workspace_id == workspace_id, TemplateReview.document_id == document_id)
+        .filter(TemplateReview.id < before_id if before_id is not None else True)
         .order_by(TemplateReview.created_at.desc(), TemplateReview.id.desc())
-        .limit(50)
+        .limit(limit)
         .all()
     )
     return [_review_out(item) for item in items]

@@ -77,8 +77,11 @@ def decode_access_token(token: str) -> dict[str, Any]:
     if len(parts) != 3:
         raise TokenError("token 格式错误")
     header_b64, payload_b64, signature_b64 = parts
-    signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
     try:
+        signing_input = f"{header_b64}.{payload_b64}".encode("ascii")
+        header = json.loads(_b64url_decode(header_b64))
+        if not isinstance(header, dict) or header.get("alg") != "HS256":
+            raise TokenError("算法无效")
         expected = _sign(signing_input)
         provided = _b64url_decode(signature_b64)
     except (ValueError, TypeError) as exc:
@@ -89,7 +92,9 @@ def decode_access_token(token: str) -> dict[str, Any]:
         payload = json.loads(_b64url_decode(payload_b64))
     except (ValueError, TypeError) as exc:
         raise TokenError("payload 解析失败") from exc
-    exp = payload.get("exp")
-    if exp is not None and int(exp) < int(time.time()):
+    if not isinstance(payload, dict) or not isinstance(payload.get("sub"), str) or not isinstance(payload.get("exp"), (float, int)):
+        raise TokenError("token 声明无效")
+    exp = payload["exp"]
+    if exp <= time.time():
         raise TokenError("token 已过期")
     return payload

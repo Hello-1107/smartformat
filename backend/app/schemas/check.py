@@ -14,6 +14,8 @@ class Violation(BaseModel):
     actual: Any
     message: str
     paragraph_index: int | None = None
+    section_index: int | None = None
+    run_index: int | None = None
     paragraph_text: str | None = None
     severity: str = "error"
 
@@ -22,6 +24,8 @@ class CheckSummary(BaseModel):
     total: int
     by_category: dict[str, int]
     compliant: bool
+    status: str = "unknown"
+    unknown: int = 0
 
 
 class CheckCreate(BaseModel):
@@ -47,6 +51,7 @@ class CheckOut(BaseModel):
     violations: list[Violation]
     summary: CheckSummary
     created_at: datetime
+    ruleset_snapshot: dict | None = None
 
     model_config = {"from_attributes": True}
 

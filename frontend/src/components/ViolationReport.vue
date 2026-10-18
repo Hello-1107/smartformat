@@ -1,9 +1,11 @@
 <template>
   <div class="report">
     <template v-if="check">
+      <el-alert v-if="check.summary.unknown" :title="`${check.summary.unknown} 项格式无法解析，尚不能确认合规；请人工核实。`" type="warning" :closable="false" />
+      <p v-if="check.ruleset_snapshot" class="snapshot">审查依据：{{ check.ruleset_snapshot.ruleset.name }} · {{ check.ruleset_snapshot.hash.slice(0, 12) }}（执行时快照）</p>
       <div class="summary" :class="check.summary.compliant ? 'is-pass' : 'is-issue'">
         <span class="summary-icon">{{ check.summary.compliant ? "✓" : "!" }}</span>
-        <div><strong>{{ check.summary.compliant ? "本次审查全部通过" : `发现 ${check.summary.total} 处格式问题` }}</strong><p>{{ check.summary.compliant ? "文档符合所选规则，可放心提交。" : "点击下方问题可在文档预览中快速定位。" }}</p></div>
+        <div><strong>{{ check.summary.compliant ? "本次格式审查通过" : `有 ${check.summary.total} 项需要处理或核实` }}</strong><p>{{ check.summary.compliant ? "已检查的格式项符合所选规则。" : "点击下方问题可在文档预览中快速定位。" }}</p></div>
         <div class="summary-chips"><span v-for="(cnt, cat) in check.summary.by_category" :key="cat" class="chip">{{ catLabel(cat) }} {{ cnt }}</span></div>
       </div>
 
@@ -78,6 +80,7 @@ const CAT: Record<string, string> = {
   paragraph: "段落",
   page: "页面",
   heading_structure: "标题结构",
+  coverage: "审查范围",
 };
 
 function catLabel(c: string): string {
@@ -85,6 +88,7 @@ function catLabel(c: string): string {
 }
 
 function scopeLabel(s: string): string {
+  if (s === "title") return "大标题";
   if (s === "body") return "正文";
   if (s === "page") return "页面";
   if (s === "heading_structure") return "标题结构";
@@ -95,6 +99,7 @@ function scopeLabel(s: string): string {
 function fmt(v: unknown): string {
   if (v === null || v === undefined) return "未设置";
   if (typeof v === "boolean") return v ? "是" : "否";
+  if (typeof v === "object") return JSON.stringify(v);
   return String(v);
 }
 
@@ -104,7 +109,7 @@ function repairable(violation: Violation): boolean {
     "paragraph:alignment", "paragraph:line_spacing", "paragraph:space_before", "paragraph:space_after", "paragraph:first_line_indent_chars",
     "page:paper", "page:width_cm", "page:height_cm", "page:margin_top_cm", "page:margin_bottom_cm", "page:margin_left_cm", "page:margin_right_cm", "page:header_distance_cm", "page:footer_distance_cm",
   ]);
-  return fields.has(`${violation.category}:${violation.field}`);
+  return violation.severity !== "unknown" && fields.has(`${violation.category}:${violation.field}`);
 }
 
 function locate(row: Violation) {

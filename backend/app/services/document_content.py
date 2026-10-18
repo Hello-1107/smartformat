@@ -3,6 +3,7 @@
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
+import re
 
 from docx.oxml.ns import qn
 from docx.oxml import parse_xml
@@ -47,6 +48,15 @@ def preview_bytes(path: str | Path, content_prefix: str = "sf_content") -> bytes
     output = BytesIO()
     with ZipFile(path) as source:
         root = parse_xml(source.read("word/document.xml"))
+        # 保留服务锚点命名空间，避免输入文档里的同名书签误导预览定位。
+        reserved_ids = set()
+        for start in list(root.xpath("//w:bookmarkStart")):
+            if re.fullmatch(r"sf_(?:format|content|template)_\d+", start.get(qn("w:name"), "")):
+                reserved_ids.add(start.get(qn("w:id")))
+                start.getparent().remove(start)
+        for end in list(root.xpath("//w:bookmarkEnd")):
+            if end.get(qn("w:id")) in reserved_ids:
+                end.getparent().remove(end)
         ids = [int(value) for value in root.xpath("//w:bookmarkStart/@w:id") if value.isdigit()]
         next_id = max(ids, default=0) + 1
 

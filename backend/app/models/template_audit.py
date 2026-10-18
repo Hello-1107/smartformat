@@ -21,6 +21,7 @@ class DocumentTemplate(Base, TimestampMixin):
     size: Mapped[int] = mapped_column(Integer, nullable=False)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, index=True, nullable=False)
     is_published: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    is_review_active: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
     config_json: Mapped[dict] = mapped_column(JSON, nullable=False)
     created_by: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True

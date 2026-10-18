@@ -23,6 +23,7 @@ class CheckResult(Base, TimestampMixin):
     status: Mapped[str] = mapped_column(String(20), default="done", nullable=False)
     violations_json: Mapped[list] = mapped_column(JSON, default=list, nullable=False)
     summary_json: Mapped[dict] = mapped_column(JSON, default=dict, nullable=False)
+    ruleset_snapshot: Mapped[dict | None] = mapped_column(JSON, nullable=True)
     created_by: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

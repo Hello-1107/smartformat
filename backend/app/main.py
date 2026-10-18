@@ -10,6 +10,7 @@ from app import models  # noqa: F401  确保所有模型被注册到 Base.metada
 from app.api import api_router
 from app.database import Base, engine
 from app.migrations import apply_compatibility_migrations
+from app.config import settings
 
 
 def create_app() -> FastAPI:
@@ -18,7 +19,7 @@ def create_app() -> FastAPI:
     # 演示环境放开跨域；生产环境应改为前端具体域名
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=settings.cors_origins,
         allow_credentials=False,
         allow_methods=["*"],
         allow_headers=["*"],

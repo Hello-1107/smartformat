@@ -5,7 +5,9 @@ ParsedDocument 由 services/docx_parser.py 产出，字段与规则引擎消费�
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
+
+PARSER_VERSION = 4
 
 
 class FontInfo(BaseModel):
@@ -22,14 +24,22 @@ class ParsedParagraph(BaseModel):
     text: str
     style_name: str
     level: int | None = None  # 1..6 表示标题层级，None 表示正文
+    is_title: bool = False
+    runs: list["ParsedRun"] = Field(default_factory=list)
     font: FontInfo = FontInfo()
     alignment: str | None = None
     line_spacing: float | None = None
+    line_spacing_kind: str = "multiple"
     space_before: float | None = None
     space_after: float | None = None
     first_line_indent_chars: float | None = None
     numbered: bool = False
     bullet: bool = False
+
+
+class ParsedRun(BaseModel):
+    text: str
+    font: FontInfo = Field(default_factory=FontInfo)
 
 
 class ParsedSection(BaseModel):
@@ -46,6 +56,7 @@ class ParsedSection(BaseModel):
 
 
 class ParsedDocument(BaseModel):
+    parser_version: int = PARSER_VERSION
     filename: str
     sections: list[ParsedSection] = []
     paragraphs: list[ParsedParagraph] = []

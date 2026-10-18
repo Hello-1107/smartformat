@@ -59,7 +59,7 @@
           </div>
         </el-tooltip>
       </div>
-      <p class="template-hint">预设会填入正文、标题和页面参数；也可在“编辑规则”中保存自己的预设。</p>
+      <p class="template-hint">预设会填入正文、标题和页面参数；也可在“文本模板审查 → 模板规则”中保存自己的预设。</p>
     </div>
   </div>
 </template>
@@ -88,6 +88,7 @@ const samples = [
   { label: "毕业论文", text: "正文宋体小四、1.5 倍行距、首行缩进 2 字符；一级标题黑体三号居中；页面 A4，上下边距 2.54cm，左右边距 3.17cm" },
   { label: "商务报告", text: "正文使用微软雅黑 12 磅、两端对齐、1.5 倍行距；一级标题加粗 16 磅左对齐；A4 页面，四边距 2.54cm" },
 ];
+
 </script>
 
 <style scoped>

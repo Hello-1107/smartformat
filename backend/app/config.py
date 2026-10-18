@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import model_validator, Field
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
@@ -26,6 +27,7 @@ class Settings(BaseSettings):
     secret_key: str = "dev-secret-change-me-in-production"
     access_token_expire_minutes: int = 1440
     algorithm: str = "HS256"
+    environment: str = "development"
 
     # DeepSeek
     deepseek_api_key: str = ""
@@ -34,6 +36,17 @@ class Settings(BaseSettings):
 
     # 文件存储
     storage_dir: str = "./uploads"
+    max_upload_bytes: int = Field(default=20 * 1024 * 1024, gt=0)
+    max_uncompressed_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
+    max_zip_entries: int = Field(default=3000, gt=0)
+    workspace_quota_bytes: int = Field(default=500 * 1024 * 1024, gt=0)
+    cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
+
+    @model_validator(mode="after")
+    def production_key(self) -> "Settings":
+        if self.environment == "production" and (self.secret_key == "dev-secret-change-me-in-production" or len(self.secret_key) < 32):
+            raise ValueError("生产环境必须配置至少 32 字符的独立 SECRET_KEY")
+        return self
 
     @property
     def storage_path(self) -> Path:

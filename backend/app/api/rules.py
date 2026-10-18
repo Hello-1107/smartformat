@@ -1,8 +1,13 @@
-"""规则路由：由自然语言生成规则（DeepSeek），支持手动覆写、增删查。"""
+"""规则路由：支持自然语言、Word 文本模板和手工方式创建格式规则。"""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, HTTPException, Request, status, Query
 from sqlalchemy import func
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
+from openai import APITimeoutError
+from app.config import settings
 
 from app.database import get_db
 from app.deps import get_current_user, require_membership
@@ -18,7 +23,9 @@ from app.schemas.rule import (
     RuleTemplateOut,
 )
 from app.services.deepseek_spec import extract_ruleset
+from app.services.document_rule_extractor import extract_ruleset_from_document, extract_candidates, TemplateExtraction
 from app.services.rule_templates import get_rule_template, list_rule_templates
+from app.services.storage import save_upload, read_upload, require_storage_quota
 
 router = APIRouter(prefix="/rules", tags=["rules"])
 
@@ -66,6 +73,8 @@ def _workspace_template_id(template_id: str) -> int | None:
 
 def _snapshot_rule(db: Session, rule: Rule) -> RuleRevision:
     """将规则当前状态保存为一个新的不可变版本。"""
+    if not RuleSet.model_validate(rule.ruleset_json).has_constraints():
+        raise HTTPException(422, "规则没有有效检查项，请至少配置一项字体、段落、标题或页面约束")
     db.flush()
     latest = (
         db.query(func.max(RuleRevision.version))
@@ -198,6 +207,73 @@ def create_manual_rule(
     return _to_out(rule)
 
 
+@router.post(
+    "/from-document-template",
+    response_model=RuleOut,
+    status_code=status.HTTP_201_CREATED,
+)
+async def create_rule_from_document_template(
+    request: Request,
+    workspace_id: int,
+    filename: str = "template.docx",
+    name: str | None = None,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> RuleOut:
+    """从标准 DOCX 的正文、标题和页面样式生成一条可编辑的格式规则。"""
+    require_membership(db, user, workspace_id)
+    if not filename.lower().endswith(".docx"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "文本模板仅支持 .docx 文件")
+    if name is not None and not name.strip():
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "规则名称不能为空")
+    content = await read_upload(request)
+    require_storage_quota(db, workspace_id, len(content))
+    if not content:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "文本模板文件为空")
+
+    stored_path, _ = save_upload(content, filename)
+    try:
+        ruleset = await run_in_threadpool(extract_ruleset_from_document, stored_path, name, filename)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, f"文本模板解析失败：{exc}"
+        ) from exc
+    finally:
+        Path(stored_path).unlink(missing_ok=True)
+
+    rule = Rule(
+        workspace_id=workspace_id,
+        name=ruleset.name,
+        natural_language=f"从文本模板提取：{filename}",
+        ruleset_json=ruleset.model_dump(exclude_none=True),
+        created_by=user.id,
+    )
+    db.add(rule)
+    _snapshot_rule(db, rule)
+    db.commit()
+    db.refresh(rule)
+    return _to_out(rule)
+
+
+@router.post("/document-template-candidates", response_model=TemplateExtraction)
+async def document_template_candidates(request: Request, workspace_id: int, filename: str = "template.docx",
+    db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> TemplateExtraction:
+    require_membership(db, user, workspace_id)
+    if not filename.lower().endswith(".docx"):
+        raise HTTPException(400, "文本模板仅支持 .docx 文件")
+    content = await read_upload(request)
+    require_storage_quota(db, workspace_id, len(content))
+    stored_path, _ = save_upload(content, filename)
+    try:
+        return await run_in_threadpool(extract_candidates, stored_path, None, filename)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    finally:
+        Path(stored_path).unlink(missing_ok=True)
+
+
 @router.post("", response_model=RuleOut, status_code=status.HTTP_201_CREATED)
 def create_rule(
     body: RuleCreate,
@@ -205,13 +281,17 @@ def create_rule(
     user: User = Depends(get_current_user),
 ) -> RuleOut:
     require_membership(db, user, body.workspace_id)
+    if not settings.deepseek_api_key:
+        raise HTTPException(503, "请在后端配置 DEEPSEEK_API_KEY 后使用规则提取")
     try:
         ruleset = extract_ruleset(body.natural_language)
+    except APITimeoutError as exc:
+        raise HTTPException(504, "DeepSeek 规则提取超时，请稍后重试") from exc
     except ValueError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "DeepSeek 返回的规则无效或不完整，请重新提取") from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
-            status.HTTP_502_BAD_GATEWAY, f"DeepSeek 调用失败：{exc}"
+            status.HTTP_502_BAD_GATEWAY, "DeepSeek 规则提取失败，请稍后重试"
         ) from exc
 
     rule = Rule(
@@ -231,6 +311,8 @@ def create_rule(
 @router.get("", response_model=list[RuleOut])
 def list_rules(
     workspace_id: int,
+    before_id: int | None = None,
+    limit: int = Query(default=100, ge=1, le=200),
     db: Session = Depends(get_db),
     user: User = Depends(get_current_user),
 ) -> list[RuleOut]:
@@ -238,7 +320,9 @@ def list_rules(
     rules = (
         db.query(Rule)
         .filter(Rule.workspace_id == workspace_id)
-        .order_by(Rule.created_at.desc())
+        .filter(Rule.id < before_id if before_id is not None else True)
+        .order_by(Rule.id.desc())
+        .limit(limit)
         .all()
     )
     return [_to_out(r) for r in rules]
