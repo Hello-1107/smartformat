@@ -40,6 +40,9 @@ class Settings(BaseSettings):
     max_uncompressed_bytes: int = Field(default=100 * 1024 * 1024, gt=0)
     max_zip_entries: int = Field(default=3000, gt=0)
     workspace_quota_bytes: int = Field(default=500 * 1024 * 1024, gt=0)
+    pdftoppm_command: str = "pdftoppm"
+    tesseract_command: str = "tesseract"
+    tessdata_dir: str = ""
     cors_origins: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
     @model_validator(mode="after")

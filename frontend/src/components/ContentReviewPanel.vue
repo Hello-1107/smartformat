@@ -4,10 +4,10 @@
       <div><h3>AI 内容审查</h3><p>{{ document?.filename ?? '请先选择文档' }}</p></div>
       <el-button type="primary" :disabled="!document || historyLoading" :loading="running" @click="run">用 DeepSeek 审查内容</el-button>
     </header>
-    <p class="notice">点击审查将把正文和表格文字发送给 DeepSeek，检查措辞、语法、逻辑与一致性。建议需人工确认，不自动修改原文。</p>
+    <p class="notice">点击审查将把{{ document?.file_type === 'pdf' ? 'PDF 提取或识别的文字' : '正文和表格文字' }}发送给 DeepSeek，检查措辞、语法、逻辑与一致性。建议需人工确认，不自动修改原文。<span v-if="document?.file_type === 'pdf'">扫描件识别可能有误，点击建议后请核对对应页原件；PDF 建议仅供人工处理，不生成修订副本。</span></p>
     <el-checkbox v-model="chunked" :disabled="running">长文分段审查（最多 60000 字符，将产生多次模型请求；跨段复核基于节选）</el-checkbox>
     <el-input v-model="instructions" type="textarea" :rows="2" maxlength="1000" show-word-limit :disabled="running" placeholder="可选：补充审查重点，例如：关注前后数据是否矛盾、表达是否适合学术论文。" />
-    <p class="scope">范围：正文与表格；不含页眉页脚、图片、文本框和已删除修订。{{ chunked ? '分段模式最多 60000 字符、3000 个非空段落。' : '单次最多 30000 字符、1500 个非空段落。' }}最多列出 50 条建议。</p>
+    <p class="scope">范围：{{ document?.file_type === 'pdf' ? 'PDF 可提取或本地 OCR 识别的文字；图片含义、版式与无法识别的细节不审查。' : '正文与表格；不含页眉页脚、图片、文本框和已删除修订。' }}{{ chunked ? '分段模式最多 60000 字符、3000 个非空段落。' : '单次最多 30000 字符、1500 个非空段落。' }}最多列出 50 条建议。</p>
     <el-alert v-if="running" :title="chunked ? '正在分段审查并复核节选，可能需要数分钟。' : '正在审查，请稍候，最长约两分钟。'" type="info" :closable="false" show-icon />
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
     <div v-if="history.length" class="history">
@@ -27,13 +27,13 @@
         <div class="issue-head">
           <el-tag :type="issue.severity === '重要' ? 'danger' : issue.severity === '一般' ? 'warning' : 'info'" size="small">{{ issue.severity }}</el-tag>
           <span>{{ issue.category }}</span>
-          <el-button link type="primary" @click="emit('locate', current.document_id, issue.paragraph_index)">定位原文 · 段落 {{ issue.paragraph_index + 1 }} →</el-button>
-          <el-tag v-if="acceptedFix(index)" type="success" size="small">已接纳</el-tag>
+          <el-button link type="primary" @click="emit('locate', current.document_id, issue.paragraph_index)">定位原文 · {{ locationLabel(issue.paragraph_index) }} →</el-button>
+          <template v-if="document?.file_type !== 'pdf'"><el-tag v-if="acceptedFix(index)" type="success" size="small">已接纳</el-tag>
           <el-button v-if="acceptedFix(index)" link type="danger" @click="emit('reject', current.id, index)">取消接纳</el-button>
-          <el-button v-else link type="success" @click="acceptIssue(issue, index)">接纳并修订</el-button>
+          <el-button v-else link type="success" @click="acceptIssue(issue, index)">接纳并修订</el-button></template>
         </div>
         <button class="quote" type="button" title="点击定位到原文段落" @click="emit('locate', current.document_id, issue.paragraph_index)">{{ issue.quote }}</button>
-        <button v-for="reference in issue.related_references" :key="`${reference.paragraph_index}-${reference.quote}`" class="quote" @click="emit('locate', current.document_id, reference.paragraph_index)">关联依据 · 段落 {{ reference.paragraph_index + 1 }}：{{ reference.quote }}</button>
+        <button v-for="reference in issue.related_references" :key="`${reference.paragraph_index}-${reference.quote}`" class="quote" @click="emit('locate', current.document_id, reference.paragraph_index)">关联依据 · {{ locationLabel(reference.paragraph_index) }}：{{ reference.quote }}</button>
         <p><b>问题：</b>{{ issue.reason }}</p>
         <p class="suggestion"><b>建议：</b>{{ issue.suggestion }}</p>
         <p v-if="replacementCandidate(issue)" class="recommended"><b>推荐修订文本：</b>{{ replacementCandidate(issue) }}</p>
@@ -131,6 +131,10 @@ async function loadMore(){
 }
 function acceptedFix(issueIndex: number): ContentRepairFix | undefined {
   return props.acceptedFixes.find(fix => fix.review_id === current.value?.id && fix.issue_index === issueIndex);
+}
+function locationLabel(index: number): string {
+  if (props.document?.file_type === 'pdf') return `第 ${props.document.pdf_page_map?.[index] ?? '?'} 页`;
+  return `段落 ${index + 1}`;
 }
 function replacementCandidate(issue: ContentIssue): string | null {
   const explicit = issue.recommended_replacement?.trim();

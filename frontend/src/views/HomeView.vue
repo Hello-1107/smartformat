@@ -20,12 +20,12 @@
         </section>
         <section class="review-bar">
           <div class="selection"><span class="selection-icon doc">D</span><div><small>当前文档</small><b>{{ selectedDoc?.filename ?? '尚未选择文档' }}</b></div></div>
-          <el-button class="revision-button" :disabled="!selectedDocId || selectedFixCount === 0" :loading="generatingCopy" @click="generateRevisedCopy">生成修订后副本<span v-if="selectedFixCount">（{{ selectedFixCount }}）</span></el-button>
+          <el-button class="revision-button" :disabled="!selectedDocId || selectedFixCount === 0 || selectedDoc?.file_type === 'pdf'" :loading="generatingCopy" @click="generateRevisedCopy">生成修订后副本<span v-if="selectedFixCount">（{{ selectedFixCount }}）</span></el-button>
         </section>
         <el-card shadow="never" class="main-card">
           <el-tabs v-model="tab" class="main-tabs">
             <el-tab-pane label="工作区概览" name="dashboard"><WorkspaceDashboard :documents="documents" :rules="rules" :checks="checks" @select="onSelectHistory" @batch="batchDialogVisible = true" /></el-tab-pane>
-            <el-tab-pane label="文档预览" name="preview"><DocPreview :document-id="selectedDocId" :focus-paragraph="focusParagraph" :focus-kind="focusKind" :active="tab === 'preview'" /></el-tab-pane>
+            <el-tab-pane label="文档预览" name="preview"><PdfPreview v-if="selectedDoc?.file_type === 'pdf'" :document-id="selectedDocId" :focus-page="focusPage" :active="tab === 'preview'" /><DocPreview v-else :document-id="selectedDocId" :focus-paragraph="focusParagraph" :focus-kind="focusKind" :active="tab === 'preview'" /></el-tab-pane>
             <el-tab-pane label="文本模板审查" name="text-template">
               <section class="text-template-review">
                 <header class="text-template-head">
@@ -41,13 +41,14 @@
                 </div>
                 <div class="text-review-actions">
                   <el-checkbox-group v-model="reviewTypes" :disabled="combinedRunning" class="review-types" aria-label="文本模板审查功能选择">
-                    <el-checkbox-button value="format">格式审查</el-checkbox-button>
+                    <el-checkbox-button value="format" :disabled="selectedDoc?.file_type === 'pdf'">格式审查</el-checkbox-button>
                     <el-checkbox-button value="content">内容审查</el-checkbox-button>
                   </el-checkbox-group>
-                  <el-button class="batch-button" :disabled="!documents.length || !selectedRuleId || combinedRunning" @click="batchDialogVisible = true">批量格式审查</el-button>
+                  <el-button class="batch-button" :disabled="!wordDocuments.length || !selectedRuleId || combinedRunning" @click="batchDialogVisible = true">批量格式审查</el-button>
                   <el-button type="primary" class="run-button" :disabled="!canRunSelectedReviews" :loading="combinedRunning || running" @click="runSelectedReviews">开始文本审查 <span>→</span></el-button>
                 </div>
                 <p v-if="reviewTypes.includes('content')" class="text-template-hint">内容审查会将正文和表格文字发送给 DeepSeek；可在下方“内容审查”中设置重点和长文分段选项。</p>
+                <p v-if="selectedDoc?.file_type === 'pdf'" class="text-template-hint">PDF 可进行内容审查并按页定位；Word 格式审查及修订副本仅适用于 .docx。</p>
                 <p v-if="reviewTypes.includes('format') && (ruleDraft || ruleEditor?.isDirty)" class="text-template-hint">模板规则尚未保存，请先在“模板规则”中确认并保存，再执行格式审查。</p>
                 <p v-if="combinedRunning" class="review-progress" role="status">格式审查：{{ formatProgress }} · 内容审查：{{ contentProgress }}</p>
                 <el-tabs v-model="textReviewTab" class="text-review-tabs">
@@ -59,13 +60,14 @@
                 </el-tabs>
               </section>
             </el-tab-pane>
-            <el-tab-pane label="表单模板审查" name="template"><TemplateAuditPanel :active="tab === 'template'" :workspace-id="ws.currentId" :documents="documents" :selected-document-id="selectedDocId" :accepted-fixes="selectedTemplateFixes" @select-document="onSelectDocument" @accept="onAcceptTemplateFix" @reject="onRejectTemplateFix" @clear-review="onClearTemplateReview" /></el-tab-pane>
+            <el-tab-pane label="表单模板审查" name="template"><TemplateAuditPanel :active="tab === 'template'" :workspace-id="ws.currentId" :documents="wordDocuments" :selected-document-id="selectedDoc?.file_type === 'pdf' ? null : selectedDocId" :accepted-fixes="selectedTemplateFixes" @select-document="onSelectDocument" @accept="onAcceptTemplateFix" @reject="onRejectTemplateFix" @clear-review="onClearTemplateReview" /></el-tab-pane>
+            <el-tab-pane label="文档深度审查" name="analysis"><AnalysisPanel :workspace-id="ws.currentId" :documents="documents" :rules="rules" :selected-document-id="selectedDocId" @locate="onAnalysisLocate" /></el-tab-pane>
           </el-tabs>
         </el-card>
       </el-main>
       <el-aside class="right-rail" width="250px"><el-card shadow="never" class="history-card"><CheckHistory :checks="activeChecks" :active-id="check?.id ?? null" @select="onSelectHistory" @delete="onDeleteCheck" /></el-card></el-aside>
     </el-container>
-    <BatchCheckDialog v-model="batchDialogVisible" :documents="documents" :rule="selectedRule" :running="batchRunning" @run="runBatchCheck" />
+    <BatchCheckDialog v-model="batchDialogVisible" :documents="wordDocuments" :rule="selectedRule" :running="batchRunning" @run="runBatchCheck" />
     <RuleVersionsDialog v-model="versionDialogVisible" :rule="selectedRule" @restored="onRuleRestored" />
     <TemplateCandidatesDialog :extraction="templateExtraction" @cancel="templateExtraction = null" @confirm="onConfirmCandidates" />
   </el-container>
@@ -79,6 +81,8 @@ import { ElMessageBox } from "element-plus/es/components/message-box/index";
 import DocumentsPanel from "@/components/DocumentsPanel.vue";
 import RulesPanel from "@/components/RulesPanel.vue";
 import DocPreview from "@/components/DocPreview.vue";
+import PdfPreview from "@/components/PdfPreview.vue";
+import AnalysisPanel from "@/components/AnalysisPanel.vue";
 import ContentReviewPanel from "@/components/ContentReviewPanel.vue";
 import TemplateAuditPanel from "@/components/TemplateAuditPanel.vue";
 import ViolationReport from "@/components/ViolationReport.vue";
@@ -92,7 +96,7 @@ import { checkApi, documentApi, ruleApi } from "@/api";
 import { errText } from "@/api/http";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
-import type { CheckItem, ContentRepairFix, DocumentItem, RuleItem, RuleSet, RuleTemplate, TemplateRepairFix, TemplateExtraction } from "@/types";
+import type { AnalysisSource, CheckItem, ContentRepairFix, DocumentItem, RuleItem, RuleSet, RuleTemplate, TemplateRepairFix, TemplateExtraction } from "@/types";
 
 const router = useRouter(); const auth = useAuthStore(); const ws = useWorkspaceStore();
 const documents = ref<DocumentItem[]>([]); const rules = ref<RuleItem[]>([]); const checks = ref<CheckItem[]>([]); const templates = ref<RuleTemplate[]>([]);
@@ -112,6 +116,7 @@ async function mayDiscard() {
   try { await ElMessageBox.confirm('当前规则有未保存的修改，确认离开？', '未保存规则'); return true; } catch { return false; }
 }
 const focusKind = ref<"format" | "content">("format");
+const focusPage = ref<number | null>(null);
 type ReviewType = "format" | "content";
 const reviewTypes = ref<ReviewType[]>(["format"]);
 const formatProgress=ref('未选择'); const contentProgress=ref('未选择');
@@ -123,6 +128,7 @@ const acceptedFormat = ref<Record<number, number[]>>({});
 const acceptedContent = ref<Record<string, { documentId: number; fix: ContentRepairFix }>>({});
 const acceptedTemplate = ref<Record<string, { documentId: number; fix: TemplateRepairFix }>>({});
 const selectedDoc = computed(() => documents.value.find((d) => d.id === selectedDocId.value) ?? null);
+const wordDocuments = computed(() => documents.value.filter(d => d.file_type !== 'pdf'));
 const selectedRule = computed(() => rules.value.find((r) => r.id === selectedRuleId.value) ?? null);
 const activeChecks = computed(() => selectedDocId.value == null ? [] : checks.value.filter(item => item.document_id === selectedDocId.value));
 const selectedFormatIndexes = computed(() => check.value ? acceptedFormat.value[check.value.id] ?? [] : []);
@@ -131,7 +137,7 @@ const selectedTemplateFixes = computed(() => selectedDocId.value == null ? [] : 
 const selectedFixCount = computed(() => selectedFormatIndexes.value.length + selectedContentFixes.value.length + selectedTemplateFixes.value.length);
 const canRunSelectedReviews = computed(() => {
   if (selectedDocId.value == null || reviewTypes.value.length === 0 || running.value || extractingTemplate.value) return false;
-  if (reviewTypes.value.includes('format') && ruleEditor.value?.isDirty) return false;
+  if (reviewTypes.value.includes('format') && (ruleEditor.value?.isDirty || selectedDoc.value?.file_type === 'pdf')) return false;
   if (reviewTypes.value.includes('content') && contentReviewPanel.value?.running) return false;
   return !reviewTypes.value.includes("format") || selectedRuleId.value != null;
 });
@@ -147,7 +153,7 @@ function syncCurrentCheck() { check.value = activeChecks.value[0] ?? null; }
 async function loadAll() { await ws.load(); await Promise.all([loadDocuments(), loadRules(), loadChecks(), loadTemplates()]); syncCurrentCheck(); }
 async function onSwitchWorkspace(id: number) { if (!(await mayDiscard())) return; ws.currentId = id; documents.value=[]; rules.value=[]; checks.value=[]; templates.value=[]; selectedDocId.value = null; selectedRuleId.value = null; ruleDraft.value = null; check.value = null; focusParagraph.value = null; acceptedFormat.value = {}; acceptedContent.value = {}; acceptedTemplate.value = {}; const valid=context(); try { await Promise.all([loadDocuments(), loadRules(), loadChecks(), loadTemplates()]); if(valid()) syncCurrentCheck(); } catch (e) { if(valid()) ElMessage.error(errText(e)); } }
 async function onNewWorkspace() { if(!(await mayDiscard()))return; const valid=context(); try { const { value } = await ElMessageBox.prompt("请输入工作区名称", "新建工作区", { confirmButtonText: "创建", cancelButtonText: "取消", inputPattern: /\S+/, inputErrorMessage: "工作区名称不能为空" }); if(!valid())return; await ws.create(value.trim()); documents.value = []; rules.value = []; checks.value = []; templates.value = []; selectedDocId.value=null; selectedRuleId.value=null; ruleDraft.value = null; check.value = null; acceptedFormat.value = {}; acceptedContent.value = {}; acceptedTemplate.value = {}; await Promise.all([loadDocuments(), loadRules(), loadChecks(), loadTemplates()]); syncCurrentCheck(); } catch(e) { if(e!=='cancel' && e!=='close') ElMessage.error(errText(e)); } }
-function onSelectDocument(id: number | null) { selectedDocId.value = id; focusParagraph.value = null; syncCurrentCheck(); }
+function onSelectDocument(id: number | null) { selectedDocId.value = id; focusParagraph.value = null; focusPage.value=null; if(documents.value.find(doc=>doc.id===id)?.file_type==='pdf')reviewTypes.value=['content']; syncCurrentCheck(); }
 async function onUpload(file: File) { if (ws.currentId == null) return; const valid=context(); uploading.value = true; try { const resp = await documentApi.upload(ws.currentId, file); if(!valid()) return; await loadDocuments(); if(!valid())return; onSelectDocument(resp.data.id); tab.value = "preview"; ElMessage.success("文档已上传并完成解析"); } catch (e) { if(valid()) ElMessage.error(errText(e)); } finally { uploading.value = false; } }
 async function onDeleteDoc(doc: DocumentItem) { const valid=context(); try { await ElMessageBox.confirm(`删除文档「${doc.filename}」及其全部格式、内容和表单审查历史？此操作无法恢复。`, "删除文档", { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" }); } catch { return; } if(!valid())return; try { await documentApi.remove(doc.id); if(!valid())return; for(const item of checks.value.filter(c=>c.document_id===doc.id)) delete acceptedFormat.value[item.id]; acceptedContent.value=Object.fromEntries(Object.entries(acceptedContent.value).filter(([,item])=>item.documentId!==doc.id)); acceptedTemplate.value=Object.fromEntries(Object.entries(acceptedTemplate.value).filter(([,item])=>item.documentId!==doc.id)); await Promise.all([loadDocuments(),loadChecks()]); if(!valid())return; syncCurrentCheck(); ElMessage.success("文档及全部审查历史已删除"); } catch (e) { if(valid())ElMessage.error(errText(e)); } }
 async function onGenerate(text: string) { if (ws.currentId == null || !(await mayDiscard())) return; const valid=context(); generating.value = true; try { const resp = await ruleApi.generate(ws.currentId, text); if(!valid())return; await loadRules(); if(!valid())return; ruleDraft.value = null; selectedRuleId.value = resp.data.id; openTextReview('editor'); ElMessage.success("AI 已提取规则，可在编辑器中微调"); } catch (e) { if(valid())ElMessage.error(errText(e)); } finally { generating.value = false; } }
@@ -259,9 +265,35 @@ async function onContentLocate(documentId: number, index: number) {
   focusParagraph.value = null;
   focusKind.value = "content";
   selectedDocId.value = documentId;
+  const document = documents.value.find(item=>item.id===documentId);
+  if (document?.file_type === 'pdf') {
+    focusPage.value = null;
+    tab.value = 'preview';
+    await nextTick();
+    focusPage.value = document.pdf_page_map?.[index] ?? 1;
+    return;
+  }
   tab.value = "preview";
   await nextTick();
   focusParagraph.value = index;
+}
+async function onAnalysisLocate(source: AnalysisSource, kind: "format" | "content") {
+  const document = documents.value.find(item=>item.id===source.document_id);
+  if (!document) return;
+  if (document?.file_type === 'pdf') {
+    selectedDocId.value = source.document_id;
+    focusPage.value = null;
+    tab.value = 'preview';
+    await nextTick();
+    focusPage.value = source.page_number ?? document.pdf_page_map?.[source.paragraph_index ?? 0] ?? 1;
+    return;
+  }
+  focusParagraph.value = null;
+  focusKind.value = kind;
+  selectedDocId.value = source.document_id;
+  tab.value = 'preview';
+  await nextTick();
+  focusParagraph.value = source.paragraph_index;
 }
 function logout() { auth.logout(); ws.reset(); router.push("/login"); }
 onMounted(async () => { try { await loadAll(); } catch (e) { ElMessage.error(errText(e)); } });

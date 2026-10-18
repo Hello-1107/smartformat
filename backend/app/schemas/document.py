@@ -68,6 +68,9 @@ class DocumentOut(BaseModel):
     filename: str
     size: int
     created_at: datetime
+    file_type: str = "docx"
+    pdf_page_map: list[int] | None = None
+    pdf_ocr_pages: list[int] | None = None
 
     model_config = {"from_attributes": True}
 

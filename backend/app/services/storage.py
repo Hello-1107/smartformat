@@ -29,7 +29,7 @@ def validate_docx(content: bytes) -> None:
         raise HTTPException(400, "请上传有效的 .docx 文件") from exc
 
 
-async def read_upload(request: Request) -> bytes:
+async def read_upload(request: Request, kind: str = "docx") -> bytes:
     content = bytearray()
     async for chunk in request.stream():
         if len(content) + len(chunk) > settings.max_upload_bytes:
@@ -38,7 +38,13 @@ async def read_upload(request: Request) -> bytes:
     if not content:
         raise HTTPException(400, "文件为空")
     result = bytes(content)
-    await run_in_threadpool(validate_docx, result)
+    if kind == "docx":
+        await run_in_threadpool(validate_docx, result)
+    elif kind == "pdf":
+        if not result.startswith(b"%PDF-"):
+            raise HTTPException(400, "请上传有效的 PDF 文件")
+    else:
+        raise HTTPException(400, "不支持的文件类型")
     return result
 
 

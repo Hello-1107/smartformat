@@ -299,6 +299,8 @@ def create_template_review(
     document = db.get(Document, body.document_id)
     if document is None or document.workspace_id != body.workspace_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "待审文档不存在")
+    if document.file_type != "docx":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "表单模板审查仅支持 .docx 文档")
     if not Path(template.stored_path).is_file() or not Path(document.stored_path).is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "模板或待审文档文件已丢失")
     config = TemplateConfiguration.model_validate(template.config_json)

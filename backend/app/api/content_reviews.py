@@ -14,6 +14,7 @@ from app.models.content_review import ContentReview
 from app.schemas.content_review import ContentReviewCreate, ContentReviewOut
 from app.services.deepseek_content import review_content, review_content_chunked, validate_chunked
 from app.services.document_content import read_content, validate_content
+from app.services.pdf_content import paragraphs_from_pdf
 
 router = APIRouter(prefix="/content-reviews", tags=["content-reviews"])
 
@@ -46,12 +47,12 @@ def create_review(
     if not Path(doc.stored_path).is_file():
         raise HTTPException(404, "文档文件已丢失，请重新上传")
     try:
-        paragraphs = read_content(doc.stored_path)
+        paragraphs = paragraphs_from_pdf(doc.pdf_json or {}) if doc.file_type == "pdf" else read_content(doc.stored_path)
         (validate_chunked if body.chunked else validate_content)(paragraphs)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except Exception as exc:
-        raise HTTPException(400, "无法读取文档内容，请重新上传有效的 docx") from exc
+        raise HTTPException(400, "无法读取文档内容，请重新上传有效的 Word 或 PDF 文件") from exc
     if not settings.deepseek_api_key:
         raise HTTPException(503, "请在后端配置 DEEPSEEK_API_KEY 后使用内容审查")
     try:

@@ -16,6 +16,8 @@ def apply_compatibility_migrations(engine: Engine) -> None:
             connection.execute(text("ALTER TABLE document_templates " + f"ADD COLUMN is_published BOOLEAN NOT NULL DEFAULT {default}"))
         if "check_results" in tables and "ruleset_snapshot" not in {c["name"] for c in inspector.get_columns("check_results")}:
             connection.execute(text("ALTER TABLE check_results ADD COLUMN ruleset_snapshot JSON"))
+        if "documents" in tables and "pdf_json" not in {c["name"] for c in inspector.get_columns("documents")}:
+            connection.execute(text("ALTER TABLE documents ADD COLUMN pdf_json JSON"))
         if "document_templates" in tables and "is_review_active" not in {c["name"] for c in inspector.get_columns("document_templates")}:
             default = "FALSE" if engine.dialect.name == "postgresql" else "0"
             connection.execute(text(f"ALTER TABLE document_templates ADD COLUMN is_review_active BOOLEAN NOT NULL DEFAULT {default}"))

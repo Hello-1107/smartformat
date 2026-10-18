@@ -20,6 +20,11 @@ class Document(Base, TimestampMixin):
     size: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     # docx_parser 产出的结构化结果（缓存，避免重复解析）
     parsed_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    pdf_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    @property
+    def file_type(self) -> str:
+        return "pdf" if self.filename.lower().endswith(".pdf") else "docx"
     created_by: Mapped[int] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

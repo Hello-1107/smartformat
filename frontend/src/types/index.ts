@@ -73,6 +73,58 @@ export interface DocumentItem {
   size: number;
   created_at: string;
   parsed?: ParsedDocument | null;
+  file_type?: "docx" | "pdf";
+  pdf_page_map?: number[] | null;
+  pdf_ocr_pages?: number[] | null;
+}
+
+export interface AnalysisSource {
+  document_id: number;
+  paragraph_index: number | null;
+  page_number: number | null;
+  quote: string | null;
+}
+
+export interface AnalysisFinding {
+  category: string;
+  status: string;
+  message: string;
+  sources: AnalysisSource[];
+}
+
+export interface VersionCompareResult {
+  original_id: number;
+  revised_id: number;
+  rule_id: number;
+  original_issue_count: number;
+  revised_issue_count: number;
+  findings: AnalysisFinding[];
+}
+
+export interface StructureCheckResult {
+  document_id: number;
+  headings_found: string[];
+  findings: AnalysisFinding[];
+}
+
+export interface CrossFieldSpec {
+  name: string;
+  aliases: string[];
+  value_type: "text" | "number" | "date";
+}
+
+export interface CrossFieldValue {
+  document_id: number;
+  value: string | null;
+  normalized_value: string | null;
+  source: AnalysisSource | null;
+  status: "match" | "different" | "missing" | "ambiguous" | "baseline";
+  candidates: AnalysisSource[];
+}
+
+export interface CrossDocumentResult {
+  baseline_id: number;
+  fields: { name: string; baseline_value: string | null; values: CrossFieldValue[] }[];
 }
 
 export type Alignment = "left" | "center" | "right" | "justify";

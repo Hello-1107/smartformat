@@ -28,6 +28,7 @@ from app.schemas.template_audit import TemplateReviewResult
 from app.services.docx_parser import parse_docx
 from app.services.storage import save_upload, read_upload, require_storage_quota
 from app.services.document_content import preview_bytes
+from app.services.pdf_content import extract_pdf, page_map_from_pdf
 from app.services.revision_copy import (
     ContentReplacement,
     RepairError,
@@ -38,12 +39,12 @@ from app.services.revision_copy import (
 router = APIRouter(prefix="/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
 
-ALLOWED_SUFFIX = ".docx"
+ALLOWED_SUFFIXES = (".docx", ".pdf")
 
 
 def _to_detail(doc: Document) -> DocumentDetail:
     parsed = None
-    if doc.parsed_json:
+    if doc.parsed_json and doc.file_type == "docx":
         parsed = ParsedDocument.model_validate(doc.parsed_json)
     return DocumentDetail(
         id=doc.id,
@@ -52,6 +53,9 @@ def _to_detail(doc: Document) -> DocumentDetail:
         size=doc.size,
         created_at=doc.created_at,
         parsed=parsed,
+        file_type=doc.file_type,
+        pdf_page_map=page_map_from_pdf(doc.pdf_json),
+        pdf_ocr_pages=doc.pdf_json.get("ocr_pages", []) if doc.pdf_json else None,
     )
 
 
@@ -64,15 +68,17 @@ async def upload_document(
     user: User = Depends(get_current_user),
 ) -> DocumentDetail:
     require_membership(db, user, workspace_id)
-    if not filename.lower().endswith(ALLOWED_SUFFIX):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "仅支持 .docx 文件")
-    content = await read_upload(request)
+    if not filename.lower().endswith(ALLOWED_SUFFIXES):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "仅支持 .docx 或 .pdf 文件")
+    kind = "pdf" if filename.lower().endswith(".pdf") else "docx"
+    content = await read_upload(request, kind)
     require_storage_quota(db, workspace_id, len(content))
     if not content:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "文件为空")
     stored_path, _ = save_upload(content, filename)
     try:
-        parsed = await run_in_threadpool(parse_docx, stored_path)
+        parsed = await run_in_threadpool(parse_docx, stored_path) if kind == "docx" else None
+        pdf_data = await run_in_threadpool(extract_pdf, content) if kind == "pdf" else None
     except Exception as exc:  # noqa: BLE001 - 解析失败应提示用户而非 500
         Path(stored_path).unlink(missing_ok=True)
         raise HTTPException(
@@ -84,7 +90,8 @@ async def upload_document(
         filename=filename,
         stored_path=stored_path,
         size=len(content),
-        parsed_json=parsed.model_dump(),
+        parsed_json=parsed.model_dump() if parsed else None,
+        pdf_json=pdf_data,
         created_by=user.id,
     )
     db.add(doc)
@@ -109,14 +116,17 @@ def list_documents(
     require_membership(db, user, workspace_id)
     docs = (
         db.query(Document)
-        .options(load_only(Document.id, Document.workspace_id, Document.filename, Document.size, Document.created_at))
+        .options(load_only(Document.id, Document.workspace_id, Document.filename, Document.size, Document.created_at, Document.pdf_json))
         .filter(Document.workspace_id == workspace_id)
         .filter(Document.id < before_id if before_id is not None else True)
         .order_by(Document.id.desc())
         .limit(limit)
         .all()
     )
-    return [DocumentOut.model_validate(d) for d in docs]
+    return [DocumentOut(id=d.id, workspace_id=d.workspace_id, filename=d.filename, size=d.size,
+                        created_at=d.created_at, file_type=d.file_type,
+                        pdf_page_map=page_map_from_pdf(d.pdf_json),
+                        pdf_ocr_pages=d.pdf_json.get("ocr_pages", []) if d.pdf_json else None) for d in docs]
 
 
 @router.get("/{document_id}", response_model=DocumentDetail)
@@ -160,11 +170,11 @@ def preview_document(
     if not Path(doc.stored_path).is_file():
         raise HTTPException(404, "文档文件已丢失")
     try:
-        content = preview_bytes(doc.stored_path)
+        content = preview_bytes(doc.stored_path) if doc.file_type == "docx" else Path(doc.stored_path).read_bytes()
     except Exception as exc:
         raise HTTPException(400, "无法生成文档预览") from exc
     return Response(
-        content, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        content, media_type="application/pdf" if doc.file_type == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Cache-Control": "no-store"},
     )
 
@@ -181,6 +191,8 @@ def create_revised_copy(
     doc = db.get(Document, document_id)
     if doc is None or doc.workspace_id != body.workspace_id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "文档不存在")
+    if doc.file_type != "docx":
+        raise HTTPException(400, "PDF 暂不支持生成 Word 修订副本")
     if not Path(doc.stored_path).is_file():
         raise HTTPException(status.HTTP_404_NOT_FOUND, "文档文件已丢失")
 

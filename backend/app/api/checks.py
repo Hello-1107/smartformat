@@ -44,6 +44,8 @@ def _build_check(
     *, document: Document, rule: Rule, workspace_id: int, user_id: int
 ) -> CheckResult:
     """执行一次确定性审查并返回尚未持久化的结果。"""
+    if document.file_type != "docx":
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "格式审查仅支持 .docx 文档")
     if document.parsed_json is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"文档「{document.filename}」尚未解析")
     if not Path(document.stored_path).is_file():

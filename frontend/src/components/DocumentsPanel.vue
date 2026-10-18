@@ -5,11 +5,11 @@
       <el-upload
         :show-file-list="false"
         :auto-upload="false"
-        accept=".docx"
+        accept=".docx,.pdf"
         :on-change="onPick"
       >
         <el-button size="small" type="primary" :loading="uploading">
-          上传 .docx
+          上传文档
         </el-button>
       </el-upload>
     </div>
@@ -27,7 +27,7 @@
         :class="{ active: d.id === modelValue }"
         @click="$emit('update:modelValue', d.id)"
       >
-        <span class="doc-badge">DOC</span>
+        <span class="doc-badge">{{ d.file_type === 'pdf' ? 'PDF' : 'DOC' }}</span>
         <span class="doc-info"><span class="doc-name" :title="d.filename">{{ d.filename }}</span><small>{{ fileSize(d.size) }} · {{ formatDate(d.created_at) }}</small></span>
         <el-button
           link

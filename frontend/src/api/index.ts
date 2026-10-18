@@ -14,6 +14,10 @@ import type {
   RevisedCopyRequest,
   TokenResponse,
   TemplateExtraction,
+  VersionCompareResult,
+  StructureCheckResult,
+  CrossDocumentResult,
+  CrossFieldSpec,
   Workspace,
 } from "@/types";
 
@@ -228,5 +232,17 @@ export const checkApi = {
   },
   remove(id: number) {
     return http.delete(`/checks/${id}`);
+  },
+};
+
+export const analysisApi = {
+  compareVersions(workspaceId: number, originalId: number, revisedId: number, ruleId: number) {
+    return http.post<VersionCompareResult>("/analysis/versions", { workspace_id: workspaceId, original_id: originalId, revised_id: revisedId, rule_id: ruleId });
+  },
+  checkStructure(workspaceId: number, documentId: number, requiredHeadings: string[], requireOrder: boolean) {
+    return http.post<StructureCheckResult>("/analysis/structure", { workspace_id: workspaceId, document_id: documentId, required_headings: requiredHeadings, require_order: requireOrder });
+  },
+  compareDocuments(workspaceId: number, documentIds: number[], baselineId: number, fields: CrossFieldSpec[]) {
+    return http.post<CrossDocumentResult>("/analysis/cross-documents", { workspace_id: workspaceId, document_ids: documentIds, baseline_id: baselineId, fields });
   },
 };
