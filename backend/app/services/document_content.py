@@ -34,6 +34,34 @@ def read_content(path: str | Path) -> list[ContentParagraph]:
     return paragraphs
 
 
+def content_locations(path: str | Path) -> dict[int, str]:
+    """按内容审查的 XML 段落序号给出可人工查找的 Word 位置。"""
+    with ZipFile(path) as archive:
+        root = parse_xml(archive.read("word/document.xml"))
+    body_paragraphs = {element: index + 1 for index, element in enumerate(root.xpath("./w:body/w:p"))}
+    tables = {element: index + 1 for index, element in enumerate(root.xpath("./w:body//w:tbl"))}
+    locations: dict[int, str] = {}
+    for index, element in enumerate(_paragraphs(root)):
+        cells = element.xpath("ancestor::w:tc")
+        if cells:
+            cell = cells[0]
+            rows = element.xpath("ancestor::w:tr")
+            table_nodes = element.xpath("ancestor::w:tbl")
+            if rows and table_nodes:
+                row = rows[0]
+                table = table_nodes[0]
+                row_number = row.xpath("../w:tr").index(row) + 1
+                cell_number = row.xpath("./w:tc").index(cell) + 1
+                part = cell.xpath(".//w:p").index(element) + 1
+                locations[index] = f"第 {tables[table]} 个表格第 {row_number} 行第 {cell_number} 列，单元格第 {part} 段"
+                continue
+        if element in body_paragraphs:
+            locations[index] = f"正文第 {body_paragraphs[element]} 段"
+        else:
+            locations[index] = f"正文区域第 {index + 1} 个内容段落"
+    return locations
+
+
 def validate_content(paragraphs: list[ContentParagraph]) -> None:
     if not paragraphs:
         raise ValueError("文档没有可审查的正文或表格文字")

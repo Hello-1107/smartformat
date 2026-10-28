@@ -99,12 +99,14 @@ export interface VersionCompareResult {
   original_issue_count: number;
   revised_issue_count: number;
   findings: AnalysisFinding[];
+  export_signature?: string | null;
 }
 
 export interface StructureCheckResult {
   document_id: number;
   headings_found: string[];
   findings: AnalysisFinding[];
+  export_signature?: string | null;
 }
 
 export interface CrossFieldSpec {
@@ -125,6 +127,7 @@ export interface CrossFieldValue {
 export interface CrossDocumentResult {
   baseline_id: number;
   fields: { name: string; baseline_value: string | null; values: CrossFieldValue[] }[];
+  export_signature?: string | null;
 }
 
 export type Alignment = "left" | "center" | "right" | "justify";

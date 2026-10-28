@@ -246,3 +246,12 @@ export const analysisApi = {
     return http.post<CrossDocumentResult>("/analysis/cross-documents", { workspace_id: workspaceId, document_ids: documentIds, baseline_id: baselineId, fields });
   },
 };
+
+export const reportApi = {
+  format(checkId: number) { return http.get<Blob>(`/reports/checks/${checkId}`, { responseType: "blob", timeout: 120000 }); },
+  content(reviewId: number) { return http.get<Blob>(`/reports/content-reviews/${reviewId}`, { responseType: "blob", timeout: 120000 }); },
+  template(reviewId: number) { return http.get<Blob>(`/reports/template-reviews/${reviewId}`, { responseType: "blob", timeout: 120000 }); },
+  analysis(workspaceId: number, kind: "versions" | "structure" | "cross-documents", result: VersionCompareResult | StructureCheckResult | CrossDocumentResult) {
+    return http.post<Blob>(`/reports/analysis/${kind}`, { workspace_id: workspaceId, result }, { responseType: "blob", timeout: 120000 });
+  },
+};

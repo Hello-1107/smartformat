@@ -39,6 +39,7 @@ class VersionCompareResult(BaseModel):
     original_issue_count: int
     revised_issue_count: int
     findings: list[Finding]
+    export_signature: str | None = None
 
 
 class StructureCheckRequest(BaseModel):
@@ -52,6 +53,7 @@ class StructureCheckResult(BaseModel):
     document_id: int
     headings_found: list[str]
     findings: list[Finding]
+    export_signature: str | None = None
 
 
 class FieldSpec(BaseModel):
@@ -109,3 +111,4 @@ class CrossFieldResult(BaseModel):
 class CrossDocumentResult(BaseModel):
     baseline_id: int
     fields: list[CrossFieldResult]
+    export_signature: str | None = None

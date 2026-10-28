@@ -66,8 +66,9 @@ let scrolls = 0;
 const originalScroll = Element.prototype.scrollIntoView;
 Element.prototype.scrollIntoView = function(...args) { scrolls++; originalScroll.apply(this, args); };
 try {
-  await wait(() => document.querySelector(".content-review header button:not([disabled])"));
-  document.querySelector(".content-review header button").click();
+  const runButton = () => [...document.querySelectorAll(".content-review header button")].find(button => button.textContent.includes("用 DeepSeek 审查内容"));
+  await wait(() => runButton() && !runButton().disabled);
+  runButton().click();
   await wait(() => document.querySelector(".issue .quote"));
   document.querySelector(".issue .quote").click();
   await wait(() => document.querySelector(".is-focused"));

@@ -2,7 +2,8 @@
   <section class="content-review">
     <header>
       <div><h3>AI 内容审查</h3><p>{{ document?.filename ?? '请先选择文档' }}</p></div>
-      <el-button type="primary" :disabled="!document || historyLoading" :loading="running" @click="run">用 DeepSeek 审查内容</el-button>
+      <div class="header-actions"><el-button :disabled="!current || running" :loading="exportingId === current?.id" @click="exportCurrent">导出当前内容审查报告 DOCX</el-button>
+      <el-button type="primary" :disabled="!document || historyLoading" :loading="running" @click="run">用 DeepSeek 审查内容</el-button></div>
     </header>
     <p class="notice">点击审查将把{{ document?.file_type === 'pdf' ? 'PDF 提取或识别的文字' : '正文和表格文字' }}发送给 DeepSeek，检查措辞、语法、逻辑与一致性。建议需人工确认，不自动修改原文。<span v-if="document?.file_type === 'pdf'">扫描件识别可能有误，点击建议后请核对对应页原件；PDF 建议仅供人工处理，不生成修订副本。</span></p>
     <el-checkbox v-model="chunked" :disabled="running">长文分段审查（最多 60000 字符，将产生多次模型请求；跨段复核基于节选）</el-checkbox>
@@ -48,8 +49,9 @@
 import { computed, onBeforeUnmount, ref, watch } from "vue";
 import { ElMessage } from "element-plus/es/components/message/index";
 import { ElMessageBox } from "element-plus/es/components/message-box/index";
-import { contentReviewApi } from "@/api";
+import { contentReviewApi, reportApi } from "@/api";
 import { errText } from "@/api/http";
+import { downloadBlob, downloadErrorText } from "@/utils/download";
 import type { ContentIssue, ContentRepairFix, ContentReview, DocumentItem } from "@/types";
 
 const props = withDefaults(defineProps<{ workspaceId: number | null; document: DocumentItem | null; acceptedFixes?: ContentRepairFix[] }>(), { acceptedFixes: () => [] });
@@ -65,7 +67,21 @@ const selectedId = ref<number | null>(null); const running = ref(false);
 const historyLoading = ref(false); const error = ref("");
 const hasMore=ref(false);
 const current = computed(() => history.value.find(item => item.id === selectedId.value) ?? null);
+const exportingId = ref<number | null>(null);
 let generation = 0;
+
+async function exportCurrent() {
+  const selected = current.value;
+  if (!selected || exportingId.value != null) return;
+  const request = generation;
+  exportingId.value = selected.id;
+  try {
+    const response = await reportApi.content(selected.id);
+    if (request !== generation || current.value?.id !== selected.id) return;
+    downloadBlob(response.data, `${(props.document?.filename ?? "文档").replace(/\.(docx|pdf)$/i, "")}_内容审查报告.docx`);
+  } catch (cause) { if (request === generation) ElMessage.error(await downloadErrorText(cause)); }
+  finally { exportingId.value = null; }
+}
 
 watch([() => props.workspaceId, () => props.document?.id], async () => {
   const request = ++generation;
@@ -176,5 +192,6 @@ function date(value: string) {
 </script>
 
 <style scoped>
+.header-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .content-review{min-height:480px;color:#34445f}header,.history,.issue-head{display:flex;align-items:center;gap:12px;justify-content:space-between}h3{margin:0;font-size:19px}header p{margin:6px 0;font-size:13px;word-break:break-all}.notice{color:#65738c;line-height:1.8;font-size:13px}.scope{color:#7e8b9f;font-size:12px;line-height:1.7}.history{justify-content:flex-start;margin:20px 0;font-size:13px}.history .el-select{width:300px;max-width:100%}.result>p{white-space:pre-wrap;line-height:1.7}.issue{margin:16px 0;padding:16px;border:1px solid #e4eaf4;border-radius:10px}.issue-head{justify-content:flex-start;font-size:13px}.issue-head .el-button{margin-left:auto}.issue-head .el-tag~.el-button{margin-left:0}.quote{display:block;width:100%;text-align:left;white-space:pre-wrap;overflow-wrap:anywhere;border:0;border-left:3px solid #6b85df;background:#f3f6fd;color:#3c507d;padding:12px;margin-top:12px;cursor:pointer;font:inherit;font-size:14px;line-height:1.7}.quote:hover{background:#eaf0ff}.issue p{white-space:pre-wrap;overflow-wrap:anywhere;font-size:14px;line-height:1.8}.suggestion{padding:12px;border-radius:8px;background:#f0f9f5}.recommended{padding:10px 12px;border-radius:8px;border:1px solid #cfe0ff;background:#f2f6ff;color:#36528f}.accepted{padding:10px 12px;border-radius:8px;background:#eef9f3;color:#276a50}.el-alert{margin-top:12px}@media(max-width:760px){header,.history{align-items:flex-start;flex-direction:column}.issue-head{flex-wrap:wrap}}
 </style>

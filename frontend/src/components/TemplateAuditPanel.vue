@@ -83,6 +83,7 @@
           <el-option v-for="item in reviews" :key="item.id" :value="item.id" :label="`模板 v${item.template_version} · ${formatTime(item.created_at)} · ${item.total} 项问题`" />
         </el-select>
         <el-button v-if="review" link type="danger" @click="deleteReview">删除记录</el-button>
+        <el-button v-if="review" :loading="exportingId === review.id" @click="exportCurrent">导出当前表单审查报告 DOCX</el-button>
         <el-button v-if="hasMoreReviews" link :loading="moreLoading" @click="loadMoreReviews">加载更早记录</el-button>
       </div>
 
@@ -112,7 +113,8 @@ import { computed, ref, watch } from "vue";
 import { ElMessage } from "element-plus/es/components/message/index";
 import { ElMessageBox } from "element-plus/es/components/message-box/index";
 import type { UploadFile } from "element-plus";
-import { templateAuditApi } from "@/api";
+import { reportApi, templateAuditApi } from "@/api";
+import { downloadBlob, downloadErrorText } from "@/utils/download";
 import DocPreview from "@/components/DocPreview.vue";
 import type { DocumentItem, DocumentTemplate, TemplateBlock, TemplateIssue, TemplateRepairFix, TemplateReview } from "@/types";
 
@@ -137,6 +139,7 @@ const draftName = ref("");
 const draftCheckPage = ref(true);
 const reviews = ref<TemplateReview[]>([]);
 const review = ref<TemplateReview | null>(null);
+const exportingId = ref<number | null>(null);
 const hasMoreReviews=ref(false);const moreLoading=ref(false);
 const uploading = ref(false);
 const saving = ref(false);
@@ -279,6 +282,18 @@ async function runReview() {
   } catch (error) { ElMessage.error(errorText(error)); } finally { reviewing.value = false; }
 }
 function selectReview(id: number) { review.value = reviews.value.find(item => item.id === id) ?? null; }
+async function exportCurrent() {
+  const selected = review.value;
+  if (!selected || exportingId.value != null) return;
+  const valid = context(selected.document_id);
+  exportingId.value = selected.id;
+  try {
+    const response = await reportApi.template(selected.id);
+    if (!valid() || review.value?.id !== selected.id) return;
+    downloadBlob(response.data, `${(selectedDocument.value?.filename ?? "文档.docx").replace(/\.docx$/i, "")}_表单模板审查报告.docx`);
+  } catch (cause) { if (valid()) ElMessage.error(await downloadErrorText(cause)); }
+  finally { exportingId.value = null; }
+}
 async function loadMoreReviews(){
   if(props.workspaceId==null || props.selectedDocumentId==null || !reviews.value.length || moreLoading.value || reviewing.value)return;
   const valid=context(props.selectedDocumentId);const generation=reviewGeneration;moreLoading.value=true;

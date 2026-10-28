@@ -18,6 +18,7 @@ from app.services.document_analysis import check_structure, compare_fields, comp
 from app.services.document_content import read_content
 from app.services.docx_parser import parse_docx
 from app.services.pdf_content import page_map_from_pdf, paragraphs_from_pdf
+from app.services.report_export import sign_analysis
 
 
 router = APIRouter(prefix="/analysis", tags=["analysis"])
@@ -52,6 +53,7 @@ def version_compare(body: VersionCompareRequest, db: Session = Depends(get_db), 
         result = compare_versions(original.id, revised.id, rule.id, _word_parsed(original), _word_parsed(revised), RuleSet.model_validate(rule.ruleset_json))
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    result.export_signature = sign_analysis("versions", body.workspace_id, result)
     return result
 
 
@@ -60,9 +62,11 @@ def structure_check(body: StructureCheckRequest, db: Session = Depends(get_db), 
     require_membership(db, user, body.workspace_id)
     doc = _document(db, body.workspace_id, body.document_id)
     try:
-        return check_structure(doc.id, _word_parsed(doc), body.required_headings, body.require_order)
+        result = check_structure(doc.id, _word_parsed(doc), body.required_headings, body.require_order)
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+    result.export_signature = sign_analysis("structure", body.workspace_id, result)
+    return result
 
 
 @router.post("/cross-documents", response_model=CrossDocumentResult)
@@ -74,4 +78,6 @@ def cross_documents(body: CrossDocumentRequest, db: Session = Depends(get_db), u
     except Exception as exc:
         raise HTTPException(400, "无法读取核对材料，请检查文件") from exc
     maps = {doc.id: page_map_from_pdf(doc.pdf_json) for doc in docs}
-    return compare_fields(body.document_ids, body.baseline_id, body.fields, contents, maps)
+    result = compare_fields(body.document_ids, body.baseline_id, body.fields, contents, maps)
+    result.export_signature = sign_analysis("cross-documents", body.workspace_id, result)
+    return result

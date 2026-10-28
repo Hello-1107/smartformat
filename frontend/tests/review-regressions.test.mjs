@@ -16,7 +16,7 @@ const empty = async () => ({data:[]});
 beforeEach(() => {
   globalThis.__reviewMocks = {
     ruleApi:{list:empty,templates:empty},documentApi:{list:empty},checkApi:{list:empty},
-    contentReviewApi:{list:empty},templateAuditApi:{current:async()=>({data:null}),versions:empty,reviews:empty},
+    contentReviewApi:{list:empty},templateAuditApi:{current:async()=>({data:null}),versions:empty,reviews:empty},reportApi:{},downloads:[],
     workspace:reactive({currentId:null,workspaces:[],load:async()=>{}}),auth:reactive({user:{username:'test'}}),
     box:{confirm:async()=>{},prompt:async()=>({value:'确认'})},message:Object.assign(()=>{},{success(){},error(){},warning(){}}),
   };
@@ -28,8 +28,9 @@ function resolveImport(name){
   if(name==='vue')return pathToFileURL(require.resolve('vue')).href;
   if(name.startsWith('element-plus'))return dataModule('export const ElMessage=globalThis.__reviewMocks.message;export const ElMessageBox=globalThis.__reviewMocks.box;');
   if(name==='vue-router')return dataModule('export const useRouter=()=>({push(){}});');
-  if(name==='@/api')return dataModule('const m=globalThis.__reviewMocks;export const {ruleApi,documentApi,checkApi,contentReviewApi,templateAuditApi}=m;');
+  if(name==='@/api')return dataModule('const m=globalThis.__reviewMocks;export const {ruleApi,documentApi,checkApi,contentReviewApi,templateAuditApi,reportApi}=m;');
   if(name==='@/api/http')return dataModule('export const errText=e=>String(e?.message||e);export default {};');
+  if(name==='@/utils/download')return dataModule('export const downloadBlob=(blob,name)=>globalThis.__reviewMocks.downloads.push([blob,name]);export const downloadErrorText=async e=>String(e?.message||e);');
   if(name.includes('stores/workspace'))return dataModule('export const useWorkspaceStore=()=>globalThis.__reviewMocks.workspace;');
   if(name.includes('stores/auth'))return dataModule('export const useAuthStore=()=>globalThis.__reviewMocks.auth;');
   if(name.endsWith('.vue'))return dataModule('export default {};');
@@ -92,6 +93,20 @@ test('迟到的内容历史不能覆盖刚完成的新审查',async()=>{
   assert.equal(await state.run(),true);
   old.resolve({data:[{id:1,summary:'OLD',issues:[]}]});await flush();
   assert.equal(state.current.id,2);assert.equal(state.history.length,2);
+});
+
+test('内容报告只下载当前选中记录，切换记录后丢弃迟到的下载',async()=>{
+  const m=globalThis.__reviewMocks;
+  m.contentReviewApi.list=async()=>({data:[{id:2,document_id:1,summary:'新',issues:[]},{id:1,document_id:1,summary:'旧',issues:[]}]});
+  const pending=deferred();const requested=[];
+  m.reportApi.content=id=>{requested.push(id);return pending.promise;};
+  const {state}=await mount('components/ContentReviewPanel.vue',{workspaceId:1,document:{id:1,filename:'sample.docx'}});
+  await flush();state.selectedId=1;
+  const exporting=state.exportCurrent();
+  assert.deepEqual(requested,[1]);
+  state.selectedId=2;
+  pending.resolve({data:new Blob(['docx'])});await exporting;
+  assert.deepEqual(m.downloads,[]);
 });
 
 test('规则编辑保留独立标题和可恢复的不限制状态',async()=>{

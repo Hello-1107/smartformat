@@ -53,7 +53,7 @@
                 <p v-if="combinedRunning" class="review-progress" role="status">格式审查：{{ formatProgress }} · 内容审查：{{ contentProgress }}</p>
                 <el-tabs v-model="textReviewTab" class="text-review-tabs">
                   <el-tab-pane label="模板规则" name="editor"><RuleEditor ref="ruleEditor" :rule="selectedRule" :draft="ruleDraft" :saving="savingRule" @new="onNewRule" @save="onSaveRuleset" @save-template="onSaveTemplate" @versions="versionDialogVisible = true" /></el-tab-pane>
-                  <el-tab-pane name="report"><template #label>格式审查 <span v-if="check && !check.summary.compliant" class="tab-count">{{ check.summary.total }}</span></template><ViolationReport :check="check" :accepted-indexes="selectedFormatIndexes" @locate="onLocate" @accept="onAcceptFormatFix" /></el-tab-pane>
+                  <el-tab-pane name="report"><template #label>格式审查 <span v-if="check && !check.summary.compliant" class="tab-count">{{ check.summary.total }}</span></template><ViolationReport :check="check" :accepted-indexes="selectedFormatIndexes" :exporting="exportingFormatId === check?.id" @locate="onLocate" @accept="onAcceptFormatFix" @export="exportFormatReport" /></el-tab-pane>
                   <el-tab-pane label="内容审查" name="content"><ContentReviewPanel ref="contentReviewPanel" :workspace-id="ws.currentId" :document="selectedDoc" :accepted-fixes="selectedContentFixes" @locate="onContentLocate" @accept="onAcceptContentFix" @reject="onRejectContentFix" @clear-review="onClearContentReview" /></el-tab-pane>
                   <el-tab-pane label="格式历史" name="history"><CheckHistory :checks="activeChecks" :active-id="check?.id ?? null" @select="onSelectHistory" @delete="onDeleteCheck" /></el-tab-pane>
                   <el-tab-pane label="规则 JSON" name="ruleset"><pre class="json">{{ rulesetPretty }}</pre></el-tab-pane>
@@ -92,8 +92,9 @@ import BatchCheckDialog from "@/components/BatchCheckDialog.vue";
 import WorkspaceDashboard from "@/components/WorkspaceDashboard.vue";
 import RuleVersionsDialog from "@/components/RuleVersionsDialog.vue";
 import TemplateCandidatesDialog from "@/components/TemplateCandidatesDialog.vue";
-import { checkApi, documentApi, ruleApi } from "@/api";
+import { checkApi, documentApi, reportApi, ruleApi } from "@/api";
 import { errText } from "@/api/http";
+import { downloadBlob, downloadErrorText } from "@/utils/download";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
 import type { AnalysisSource, CheckItem, ContentRepairFix, DocumentItem, RuleItem, RuleSet, RuleTemplate, TemplateRepairFix, TemplateExtraction } from "@/types";
@@ -124,6 +125,7 @@ const contentReviewPanel = ref<{ run: () => Promise<boolean>; running: boolean }
 const textReviewTab = ref('editor');
 function openTextReview(section: string) { textReviewTab.value = section; tab.value = 'text-template'; }
 const tab = ref("dashboard"); const focusParagraph = ref<number | null>(null); const uploading = ref(false); const generating = ref(false); const extractingTemplate = ref(false); const running = ref(false); const combinedRunning = ref(false); const savingRule = ref(false); const batchRunning = ref(false); const batchDialogVisible = ref(false); const versionDialogVisible = ref(false); const generatingCopy = ref(false);
+const exportingFormatId = ref<number | null>(null);
 const acceptedFormat = ref<Record<number, number[]>>({});
 const acceptedContent = ref<Record<string, { documentId: number; fix: ContentRepairFix }>>({});
 const acceptedTemplate = ref<Record<string, { documentId: number; fix: TemplateRepairFix }>>({});
@@ -248,8 +250,20 @@ function onAcceptTemplateFix(fix: TemplateRepairFix) { if (selectedDocId.value =
 function onRejectTemplateFix(reviewId: number, issueIndex: number) { if (selectedDocId.value == null) return; const next = { ...acceptedTemplate.value }; delete next[`${selectedDocId.value}:${reviewId}:${issueIndex}`]; acceptedTemplate.value = next; }
 function onClearTemplateReview(reviewId: number) { const next = { ...acceptedTemplate.value }; for (const [key, item] of Object.entries(next)) if (item.fix.review_id === reviewId) delete next[key]; acceptedTemplate.value = next; }
 async function generateRevisedCopy() { if (ws.currentId == null || selectedDocId.value == null || selectedFixCount.value === 0) return; const valid=context(selectedDocId.value);const filename=`${(selectedDoc.value?.filename ?? "文档.docx").replace(/\.docx$/i, "")}_修订后副本.docx`;generatingCopy.value = true; try { const response = await documentApi.revisedCopy(selectedDocId.value, { workspace_id: ws.currentId, check_id: selectedFormatIndexes.value.length ? check.value?.id : null, format_violation_indexes: selectedFormatIndexes.value, content_fixes: selectedContentFixes.value, template_fixes: selectedTemplateFixes.value }); if(!valid())return;const blob = response.data as Blob; if (!blob.size) throw new Error("生成的副本为空"); downloadBlob(blob, filename); ElMessage.success("已生成修订后副本，原始文件未修改"); } catch (e) { if(valid())ElMessage.error(await copyErrorText(e)); } finally { generatingCopy.value = false; } }
-function downloadBlob(blob: Blob, filename: string) { const url = URL.createObjectURL(blob); const link = document.createElement("a"); link.href = url; link.download = filename; link.style.display = "none"; document.body.appendChild(link); link.click(); link.remove(); window.setTimeout(() => URL.revokeObjectURL(url), 1000); }
-async function copyErrorText(error: unknown): Promise<string> { const blob = (error as { response?: { data?: unknown } }).response?.data; if (blob instanceof Blob) { try { const data = JSON.parse(await blob.text()) as { detail?: unknown }; if (typeof data.detail === "string") return data.detail; } catch { /* 保留通用错误 */ } } return errText(error); }
+async function exportFormatReport() {
+  const current = check.value;
+  if (!current || exportingFormatId.value != null) return;
+  const valid = context(current.document_id);
+  exportingFormatId.value = current.id;
+  try {
+    const response = await reportApi.format(current.id);
+    if (!valid() || check.value?.id !== current.id) return;
+    const source = documents.value.find(doc => doc.id === current.document_id);
+    downloadBlob(response.data, `${(source?.filename ?? "文档.docx").replace(/\.docx$/i, "")}_格式审查报告.docx`);
+  } catch (error) { if (valid()) ElMessage.error(await downloadErrorText(error)); }
+  finally { exportingFormatId.value = null; }
+}
+async function copyErrorText(error: unknown): Promise<string> { return downloadErrorText(error); }
 async function onDeleteCheck(item: CheckItem) { try { await ElMessageBox.confirm("删除后无法恢复，确认删除这条格式审查记录？", "删除审查记录", { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" }); } catch { return; } try { await checkApi.remove(item.id); checks.value = checks.value.filter(checkItem => checkItem.id !== item.id); const next = { ...acceptedFormat.value }; delete next[item.id]; acceptedFormat.value = next; if (check.value?.id === item.id) syncCurrentCheck(); ElMessage.success("格式审查记录已删除"); } catch (e) { ElMessage.error(errText(e)); } }
 function onRuleRestored(rule: RuleItem) { const index = rules.value.findIndex((item) => item.id === rule.id); if (index >= 0) rules.value[index] = rule; ruleDraft.value = null; selectedRuleId.value = rule.id; openTextReview('editor'); }
 async function onLocate(index: number) {
