@@ -68,6 +68,41 @@ PDF 上传上限为 60 页、5000 行可提取文字、10 万字符，仍受通�
 - AI：DeepSeek `deepseek-chat`（规则提取及独立内容审查）
 - 存储：SQLite（演示环境），可替换为 PostgreSQL + Redis
 
+## 系统架构
+
+浏览器端使用 Vue 3 完成登录、工作区管理、文档预览、规则编辑和审查结果定位；FastAPI 提供鉴权、文档解析、审查、修订与报告导出接口；SQLite 保存演示环境中的用户、工作区、规则、文档元数据与历史结果，上传原件存于本地存储目录。
+
+AI 和确定性逻辑严格分工：DeepSeek 只负责将自然语言要求转成规则 JSON，以及输出独立的内容审查建议；`checker.py` 根据结构化规则完成格式合规判定，修订副本只执行已确认的规则值或用户确认文字。这样即使 AI 输出异常，也不会直接把它当作格式结论或写回用户原件。
+
+```text
+Vue 3 浏览器端
+  ├─ 文档预览与段落定位
+  ├─ 规则编辑与审查操作
+  └─ 历史记录和报告下载
+           │ HTTPS API
+FastAPI 服务
+  ├─ JWT 与工作区成员校验
+  ├─ DOCX PDF 解析和离线 OCR
+  ├─ DeepSeek 规则提取和内容建议
+  ├─ 确定性格式检查和深度核对
+  └─ 修订副本和 DOCX 报告导出
+           │
+SQLite 元数据和审查历史 + 本地上传文件
+```
+
+## 环境配置
+
+运行后端前，将 [`backend/.env.example`](backend/.env.example) 复制为 `backend/.env`，再按部署环境填写。真实 `DEEPSEEK_API_KEY`、生产环境 `SECRET_KEY` 和生产域名不得提交到仓库。
+
+| 项目 | 建议版本或要求 | 用途 |
+| --- | --- | --- |
+| Python | 3.10+ | FastAPI 后端与 DOCX/PDF 处理 |
+| Node.js | 18+ | Vue 3 前端构建与测试 |
+| DeepSeek API Key | 内容审查或自然语言规则提取时必需 | 仅后端环境变量读取 |
+| Poppler 和 Tesseract | 仅扫描型 PDF OCR 需要 | 安装简体中文 `chi_sim` 与英文 `eng` 语言包 |
+
+生产部署应设置 `ENVIRONMENT=production`、独立且不少于 32 字符的 `SECRET_KEY`，并将 `CORS_ORIGINS` 收紧为实际前端地址。SQLite 适用于演示；多用户生产部署可替换为 PostgreSQL，并把限流计数迁移到共享存储。
+
 ## 启动
 
 ### 后端
@@ -106,6 +141,18 @@ python -m pytest
 cd frontend
 npm test
 npm run build
+```
+
+后端测试不发送真实用户文档或真实 DeepSeek 请求，使用模拟响应验证内容审查、引用校验、导出和权限边界。前端测试覆盖关键交互回归；构建命令通过后可用于生产静态资源打包。
+
+## 代码仓库与提交说明
+
+代码仓库地址：<https://github.com/Hello-1107/myfile.git>。竞赛提交前请在 GitHub 确认仓库为 Public，或向评审账号授予访问权限；不要将 `.env`、上传原件、数据库文件或包含个人信息的测试材料推送到公开仓库。
+
+完整提交历史可用以下命令导出：
+
+```bash
+git log --reverse --date=iso-strict --format="%H%nAuthor: %an <%ae>%nDate: %ad%n%n    %s%n"
 ```
 
 ## 结构
