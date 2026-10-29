@@ -78,6 +78,7 @@ _REPAIRABLE_FORMAT_FIELDS = {
     ("page", "margin_right_cm"),
     ("page", "header_distance_cm"),
     ("page", "footer_distance_cm"),
+    ("template_content", "anchor_text"),
 }
 
 
@@ -225,6 +226,13 @@ def _apply_format_fixes(doc: Document, violations: list[Violation]) -> list[Revi
                 _set_font(paragraph, violation.field, violation.expected, violation.run_index)
             elif violation.category == "paragraph":
                 _set_paragraph(paragraph, violation.field, violation.expected)
+            elif violation.category == "template_content" and violation.field == "anchor_text":
+                nodes = _text_nodes(paragraph._p)
+                if not nodes:
+                    raise RepairError("章节标题没有可替换的文本，无法安全修订")
+                _set_text(nodes[0], str(violation.expected))
+                for node in nodes[1:]:
+                    _set_text(node, "")
             else:
                 raise RepairError(f"「{violation.message}」暂不支持自动修复")
             location = f"正文段落 {index + 1}"

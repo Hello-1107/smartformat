@@ -84,11 +84,15 @@ const CAT: Record<string, string> = {
   heading_structure: "标题结构",
   template_structure: "模板结构",
   template_content: "固定内容",
+  toc: "目录",
+  caption: "图表题注",
   coverage: "审查范围",
 };
 
 const FIELD: Record<string, string> = {
   missing_region: "缺少章节", extra_region: "多余章节", region_order: "章节顺序", anchor_text: "章节标题",
+  missing_toc: "缺少目录", toc_entry_missing: "目录缺项", toc_without_heading: "目录与正文",
+  duplicate_caption: "题注重复", caption_number_gap: "编号断档", caption_reference_missing: "引用缺少题注",
 };
 
 function catLabel(c: string): string {
@@ -120,6 +124,7 @@ function repairable(violation: Violation): boolean {
     "font:name", "font:ascii_name", "font:size", "font:bold", "font:italic", "font:color",
     "paragraph:alignment", "paragraph:line_spacing", "paragraph:space_before", "paragraph:space_after", "paragraph:first_line_indent_chars",
     "page:paper", "page:width_cm", "page:height_cm", "page:margin_top_cm", "page:margin_bottom_cm", "page:margin_left_cm", "page:margin_right_cm", "page:header_distance_cm", "page:footer_distance_cm",
+    "template_content:anchor_text",
   ]);
   return violation.severity !== "unknown" && fields.has(`${violation.category}:${violation.field}`);
 }

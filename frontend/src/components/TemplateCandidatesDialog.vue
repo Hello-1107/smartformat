@@ -20,6 +20,13 @@
         </div>
       </article>
     </section>
+    <section v-if="documentChecks" class="document-checks">
+      <div><h3>文档级检查</h3><small>从模板中识别目录、题注和代码块；可关闭不适用于当前任务的项目。</small></div>
+      <el-checkbox v-model="documentChecks.check_toc">目录与正文标题一致<span v-if="documentChecks.toc_entries.length">（{{ documentChecks.toc_entries.length }} 项）</span></el-checkbox>
+      <el-checkbox v-model="documentChecks.check_figure_numbering">图片题注编号连续</el-checkbox>
+      <el-checkbox v-model="documentChecks.check_table_numbering">表格题注编号连续</el-checkbox>
+      <el-checkbox v-model="documentChecks.check_code_style">识别代码块并检查代码样式</el-checkbox>
+    </section>
     <section v-for="(candidates, scope) in (hasRegions ? {} : extraction?.candidates)" :key="scope">
       <h3>{{ label(String(scope)) }}</h3>
       <el-radio-group v-model="choices[scope]" class="candidates">
@@ -40,18 +47,24 @@
 </template>
 <script setup lang="ts">
 import { computed, ref, watch, toRaw } from 'vue';
-import type { TemplateExtraction, RuleSet, StyleCandidate, TemplateRegionRule } from '@/types';
+import type { TemplateDocumentChecks, TemplateExtraction, RuleSet, StyleCandidate, TemplateRegionRule } from '@/types';
 const props = defineProps<{ extraction: TemplateExtraction | null }>();
 const emit = defineEmits<{ (e: 'cancel'): void; (e: 'confirm', ruleset: RuleSet): void }>();
 const choices = ref<Record<string, string>>({});
 const regionDrafts = ref<TemplateRegionRule[]>([]);
+const documentChecks = ref<TemplateDocumentChecks | null>(null);
 watch(() => props.extraction, value => {
   choices.value = {};
   regionDrafts.value = structuredClone(toRaw(value?.regions ?? []));
+  documentChecks.value = structuredClone(toRaw(value?.ruleset.template_checks ?? null));
 }, { immediate: true });
 const hasRegions = computed(() => regionDrafts.value.length > 0);
+const hasDocumentChecks = computed(() => !!documentChecks.value && !!(
+  documentChecks.value.check_toc || documentChecks.value.check_figure_numbering
+  || documentChecks.value.check_table_numbering || documentChecks.value.check_code_style
+));
 const complete = computed(() => !!props.extraction && (hasRegions.value
-  ? regionDrafts.value.some(region => region.mode !== 'ignore' && (region.required || region.check_format))
+  ? regionDrafts.value.some(region => region.mode !== 'ignore' && (region.required || region.check_format)) || hasDocumentChecks.value
   : Object.keys(props.extraction.candidates).every(key => choices.value[key])));
 function label(scope: string) { return scope === 'title' ? '大标题' : scope === 'body' ? '正文' : `${scope.slice(1)} 级标题`; }
 const alignmentLabels: Record<string, string> = { left: '左对齐', center: '居中', right: '右对齐', justify: '两端对齐' };
@@ -73,6 +86,7 @@ function details(c: StyleCandidate) {
 function confirm() {
   if (!props.extraction || !complete.value) return;
   const result = structuredClone(toRaw(props.extraction.ruleset));
+  result.template_checks = structuredClone(toRaw(documentChecks.value));
   if (hasRegions.value) {
     result.template_regions = structuredClone(toRaw(regionDrafts.value));
     emit('confirm', result);
@@ -92,4 +106,5 @@ function confirm() {
 .template-candidates-dialog :deep(.el-dialog__body){max-height:min(62vh,680px);overflow-y:auto}
 section{margin:20px 0}.candidates{display:grid;width:100%;gap:10px}.candidates :deep(.el-radio){align-items:flex-start;box-sizing:border-box;height:auto;min-height:72px;width:100%;margin:0;padding:14px}.candidates :deep(.el-radio__input){flex:0 0 auto;margin-top:3px}.candidates :deep(.el-radio__label){display:block;min-width:0;flex:1;padding-left:12px;white-space:normal}.candidate-card{min-width:0}.candidate-card strong{display:block;color:#303133;font-size:17px;line-height:1.45}.candidates small{display:block;margin-top:5px;color:#8491a5}.candidate-example{margin:7px 0 0;line-height:1.55;overflow-wrap:anywhere}.style-details{display:flex;flex-wrap:wrap;gap:6px 12px;margin:9px 0 0;padding:0;list-style:none;color:#606266;font-size:13px}.style-details li{white-space:nowrap}.style-details span{margin-right:4px;color:#909399}.el-alert{margin:8px 0}
 .region-heading{display:flex;align-items:baseline;justify-content:space-between;gap:16px}.region-heading h3{margin:0}.region-heading small{color:#8491a5}.region-config{display:grid;gap:10px}.region-card{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 14px;border:1px solid #dfe5ef;border-radius:9px;background:#fbfcff}.region-main,.region-options{display:flex;align-items:center;gap:10px}.region-main{min-width:0}.region-main>div{min-width:0}.region-main strong,.region-main small{display:block}.region-main strong{overflow:hidden;color:#303133;text-overflow:ellipsis;white-space:nowrap}.region-main small{margin-top:4px;color:#8491a5}.region-options{flex:0 0 auto}.region-options .el-select{width:116px}@media(max-width:760px){.region-card{align-items:stretch;flex-direction:column}.region-options{flex-wrap:wrap}.region-main strong{white-space:normal}}
+.document-checks{display:flex;align-items:center;flex-wrap:wrap;gap:10px 20px;padding:14px;border:1px solid #dfe5ef;border-radius:9px;background:#f8faff}.document-checks>div{width:100%}.document-checks h3{margin:0 0 3px}.document-checks small{color:#8491a5}
 </style>

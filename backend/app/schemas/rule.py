@@ -103,6 +103,19 @@ class TemplateRegionRule(RuleModel):
     body_style: ScopeRule | None = None
 
 
+class TemplateDocumentChecks(RuleModel):
+    """完整模板中的目录、题注和代码块检查配置。"""
+
+    check_toc: bool = False
+    toc_entries: list[str] = Field(default_factory=list, max_length=300)
+    check_figure_numbering: bool = False
+    check_table_numbering: bool = False
+    check_code_style: bool = False
+    code_style: ScopeRule | None = None
+    figure_caption_style: ScopeRule | None = None
+    table_caption_style: ScopeRule | None = None
+
+
 class RuleSet(RuleModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = None
@@ -112,6 +125,7 @@ class RuleSet(RuleModel):
     page: PageRule | None = None
     heading_structure: HeadingStructureRule | None = None
     template_regions: list[TemplateRegionRule] | None = Field(default=None, max_length=300)
+    template_checks: TemplateDocumentChecks | None = None
 
     @field_validator("name")
     @classmethod
@@ -130,7 +144,13 @@ class RuleSet(RuleModel):
             region.mode != "ignore" and (region.required or region.check_format)
             for region in self.template_regions or []
         )
-        return regular or structural
+        document_checks = self.template_checks is not None and any((
+            self.template_checks.check_toc,
+            self.template_checks.check_figure_numbering,
+            self.template_checks.check_table_numbering,
+            self.template_checks.check_code_style,
+        ))
+        return regular or structural or document_checks
 
 
 class RuleCreate(BaseModel):

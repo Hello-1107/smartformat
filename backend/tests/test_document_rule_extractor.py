@@ -4,12 +4,14 @@ import io
 
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.style import WD_STYLE_TYPE
 from docx.oxml.ns import qn
 from docx.shared import Cm, Pt
 
 from app.services.checker import run_check
 from app.services.document_rule_extractor import extract_candidates, extract_ruleset_from_document
 from app.services.docx_parser import parse_docx
+from app.services.revision_copy import build_revised_copy
 
 
 def _font(paragraph, name: str, size: float, bold: bool = False) -> None:
@@ -165,3 +167,56 @@ def test_structured_template_extracts_regions_and_checks_within_section(tmp_path
     ignored_rules = extraction.ruleset.model_copy(update={"template_regions": variable})
     ignored_issues, _ = run_check(parse_docx(target_path), ignored_rules)
     assert not any(issue.scope.startswith("template_region:第1章") for issue in ignored_issues)
+
+
+def test_second_phase_checks_toc_captions_code_and_repairs_anchor(tmp_path) -> None:
+    template = Document()
+    template.styles.add_style("TOC 1", WD_STYLE_TYPE.PARAGRAPH)
+    template.styles.add_style("Code Block", WD_STYLE_TYPE.PARAGRAPH)
+    template.add_paragraph("第1章 项目概述\t1", style="TOC 1")
+    heading = template.add_heading("第1章 项目概述", level=1)
+    _font(heading, "黑体", 18, True)
+    code = template.add_paragraph("const answer = 42;", style="Code Block")
+    _font(code, "宋体", 10)
+    caption = template.add_paragraph("图1 系统架构")
+    _font(caption, "宋体", 10)
+    template.add_paragraph("Spring Boot 与 Vue 用于实现前后端分离的课程项目说明。")
+    template_path = tmp_path / "二期模板.docx"
+    template.save(template_path)
+
+    extraction = extract_candidates(template_path)
+    assert [p.role for p in parse_docx(template_path).paragraphs] == [
+        "toc", "heading", "code", "figure_caption", "body",
+    ]
+    assert extraction.ruleset.template_checks is not None
+    assert extraction.ruleset.template_checks.check_toc
+    assert extraction.ruleset.template_checks.check_figure_numbering
+    assert extraction.ruleset.template_checks.check_code_style
+    assert extraction.ruleset.template_checks.toc_entries == ["第1章 项目概述"]
+
+    target = Document()
+    target.styles.add_style("TOC 1", WD_STYLE_TYPE.PARAGRAPH)
+    target.styles.add_style("Code Block", WD_STYLE_TYPE.PARAGRAPH)
+    target.add_paragraph("不存在的章节\t1", style="TOC 1")
+    heading = target.add_heading("项目概述", level=1)
+    _font(heading, "黑体", 18, True)
+    code = target.add_paragraph("const answer = 42;", style="Code Block")
+    _font(code, "宋体", 12)
+    target.add_paragraph("图1 系统架构")
+    target.add_paragraph("图3 运行结果")
+    target_path = tmp_path / "二期待审.docx"
+    target.save(target_path)
+
+    ruleset = extraction.ruleset.model_copy(update={"template_regions": extraction.regions})
+    violations, _ = run_check(parse_docx(target_path), ruleset)
+    assert any(issue.field == "toc_entry_missing" for issue in violations)
+    assert any(issue.field == "toc_without_heading" for issue in violations)
+    assert any(issue.field == "caption_number_gap" for issue in violations)
+    assert any(issue.scope == "代码块" and issue.field == "size" for issue in violations)
+    without_figures = ruleset.model_copy(deep=True)
+    without_figures.template_checks.check_figure_numbering = False
+    disabled_issues, _ = run_check(parse_docx(target_path), without_figures)
+    assert not any(issue.category == "caption" or issue.scope == "图题注" for issue in disabled_issues)
+    anchor_issue = next(issue for issue in violations if issue.field == "anchor_text")
+    revised = Document(io.BytesIO(build_revised_copy(target_path, "二期待审.docx", [anchor_issue], [])))
+    assert revised.paragraphs[1].text == "第1章 项目概述"

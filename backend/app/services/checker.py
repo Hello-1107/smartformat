@@ -18,6 +18,7 @@ from app.schemas.rule import (
     ParagraphRule,
     RuleSet,
     ScopeRule,
+    TemplateDocumentChecks,
     TemplateRegionRule,
 )
 
@@ -308,7 +309,7 @@ def _compatible_anchor(paragraph: ParsedParagraph, region: TemplateRegionRule) -
 
 def _is_prose(paragraph: ParsedParagraph) -> bool:
     text = paragraph.text.strip()
-    if paragraph.level is not None or paragraph.is_title or len(text) < 8 or _CAPTION.match(text):
+    if paragraph.role != "body" or paragraph.level is not None or paragraph.is_title or len(text) < 8 or _CAPTION.match(text):
         return False
     if _CODE_HINT.search(text) and sum(text.count(char) for char in "{};()=") >= 3:
         return False
@@ -436,6 +437,137 @@ def _check_template_regions(
         _check_region_style(violations, region, paragraph, body_end, parsed)
 
 
+def _toc_text(text: str) -> str:
+    return re.sub(r"(?:\t|[.．·…\s])+(?:\d+|[IVXLCDM]+)\s*$", "", text, flags=re.I).strip()
+
+
+_CAPTION_NUMBER = re.compile(r"^\s*([图表])\s*([0-9]+(?:[-—.．][0-9]+)*)")
+_CAPTION_REFERENCE = re.compile(r"([图表])\s*([0-9]+(?:[-—.．][0-9]+)*)")
+
+
+def _caption_key(kind: str, number: str) -> tuple[str, str]:
+    return kind, re.sub(r"[-—．]", ".", number)
+
+
+def _check_scope_style(
+    violations: list[Violation], scope: str, paragraph: ParsedParagraph,
+    style: ScopeRule | None,
+) -> None:
+    if style is None:
+        return
+    if style.font is not None:
+        _check_font(violations, scope, paragraph.font, style.font, paragraph)
+    if style.paragraph is not None:
+        _check_paragraph(violations, scope, paragraph, style.paragraph)
+
+
+def _check_toc(
+    violations: list[Violation], parsed: ParsedDocument,
+    checks: TemplateDocumentChecks,
+) -> None:
+    toc = [p for p in parsed.paragraphs if p.role == "toc" and p.text.strip()]
+    if not toc:
+        _add_template_issue(violations, None, "missing_toc", "存在目录", None, "待审文档缺少可识别的目录")
+        violations[-1].category = "toc"
+        return
+    toc_by_key: dict[str, list[ParsedParagraph]] = {}
+    for paragraph in toc:
+        key = _semantic_anchor(_toc_text(paragraph.text))
+        if key:
+            toc_by_key.setdefault(key, []).append(paragraph)
+    for expected in checks.toc_entries:
+        key = _semantic_anchor(expected)
+        if key and key not in toc_by_key:
+            _add_template_issue(
+                violations, None, "toc_entry_missing", expected, None,
+                f"目录缺少模板要求的条目「{expected}」",
+            )
+            violations[-1].category = "toc"
+    heading_keys = {
+        _semantic_anchor(p.text) for p in parsed.paragraphs
+        if p.text.strip() and (p.is_title or p.level is not None)
+    }
+    for key, entries in toc_by_key.items():
+        if key not in heading_keys:
+            paragraph = entries[0]
+            _add_template_issue(
+                violations, None, "toc_without_heading", "目录项在正文中有对应标题",
+                _toc_text(paragraph.text), f"目录项「{_toc_text(paragraph.text)}」未找到对应正文标题", paragraph,
+            )
+            violations[-1].category = "toc"
+
+
+def _check_captions(
+    violations: list[Violation], parsed: ParsedDocument,
+    checks: TemplateDocumentChecks,
+) -> None:
+    captions: dict[tuple[str, str], list[ParsedParagraph]] = {}
+    enabled = {"图": checks.check_figure_numbering, "表": checks.check_table_numbering}
+    for paragraph in parsed.paragraphs:
+        match = _CAPTION_NUMBER.match(paragraph.text)
+        if paragraph.role not in {"figure_caption", "table_caption"} or not match:
+            continue
+        captions.setdefault(_caption_key(match.group(1), match.group(2)), []).append(paragraph)
+        style = checks.figure_caption_style if match.group(1) == "图" else checks.table_caption_style
+        if enabled[match.group(1)]:
+            _check_scope_style(violations, f"{match.group(1)}题注", paragraph, style)
+
+    for (kind, number), items in captions.items():
+        if enabled[kind] and len(items) > 1:
+            _add_template_issue(
+                violations, None, "duplicate_caption", f"{kind}{number} 仅出现一次",
+                len(items), f"{kind}{number} 的题注重复", items[0],
+            )
+            violations[-1].category = "caption"
+    for kind, should_check in enabled.items():
+        if not should_check:
+            continue
+        sequences: dict[str, set[int]] = {}
+        for prefix, number in captions:
+            if prefix != kind:
+                continue
+            parts = number.split(".")
+            sequences.setdefault(".".join(parts[:-1]), set()).add(int(parts[-1]))
+        for prefix, values in sequences.items():
+            expected = set(range(1, max(values) + 1)) if values else set()
+            missing = sorted(expected - values)
+            if missing:
+                label = f"{prefix}." if prefix else ""
+                _add_template_issue(
+                    violations, None, "caption_number_gap",
+                    [f"{kind}{label}{value}" for value in sorted(expected)],
+                    [f"{kind}{label}{value}" for value in sorted(values)],
+                    f"{kind}题注编号不连续，缺少 {', '.join(f'{kind}{label}{value}' for value in missing)}",
+                )
+                violations[-1].category = "caption"
+
+    for paragraph in parsed.paragraphs:
+        if paragraph.role in {"toc", "figure_caption", "table_caption", "code"}:
+            continue
+        for match in _CAPTION_REFERENCE.finditer(paragraph.text):
+            key = _caption_key(match.group(1), match.group(2))
+            if enabled[key[0]] and key not in captions:
+                _add_template_issue(
+                    violations, None, "caption_reference_missing", f"存在{key[0]}{key[1]}题注",
+                    paragraph.text[:80], f"正文引用了{key[0]}{key[1]}，但未找到对应题注", paragraph,
+                )
+                violations[-1].category = "caption"
+
+
+def _check_template_document_features(
+    violations: list[Violation], parsed: ParsedDocument,
+    checks: TemplateDocumentChecks,
+) -> None:
+    if checks.check_toc:
+        _check_toc(violations, parsed, checks)
+    if checks.check_figure_numbering or checks.check_table_numbering:
+        _check_captions(violations, parsed, checks)
+    if checks.check_code_style:
+        for paragraph in parsed.paragraphs:
+            if paragraph.role == "code" and paragraph.text.strip():
+                _check_scope_style(violations, "代码块", paragraph, checks.code_style)
+
+
 def run_check(parsed: ParsedDocument, ruleset: RuleSet) -> tuple[list[Violation], CheckSummary]:
     """对解析结果执行规则，返回 (违规列表, 汇总)。"""
     violations: list[Violation] = []
@@ -478,6 +610,15 @@ def run_check(parsed: ParsedDocument, ruleset: RuleSet) -> tuple[list[Violation]
         if active_regions:
             applicable = True
             _check_template_regions(violations, parsed, ruleset.template_regions)
+
+    if ruleset.template_checks is not None and any((
+        ruleset.template_checks.check_toc,
+        ruleset.template_checks.check_figure_numbering,
+        ruleset.template_checks.check_table_numbering,
+        ruleset.template_checks.check_code_style,
+    )):
+        applicable = True
+        _check_template_document_features(violations, parsed, ruleset.template_checks)
 
     if ruleset.heading_structure is not None:
         applicable = applicable or ruleset.heading_structure.max_level is not None or ruleset.heading_structure.require_numbered is True

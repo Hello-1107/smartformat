@@ -33,6 +33,22 @@
             </article>
           </div>
         </el-tab-pane>
+        <el-tab-pane v-if="form.template_checks" label="目录图表与代码">
+          <div class="document-check-editor">
+            <div class="document-check-options">
+              <el-checkbox v-model="form.template_checks.check_toc">目录与正文标题一致</el-checkbox>
+              <el-checkbox v-model="form.template_checks.check_figure_numbering">图片题注编号连续</el-checkbox>
+              <el-checkbox v-model="form.template_checks.check_table_numbering">表格题注编号连续</el-checkbox>
+              <el-checkbox v-model="form.template_checks.check_code_style">识别并检查代码块样式</el-checkbox>
+            </div>
+            <div v-if="form.template_checks.check_toc" class="toc-entries"><small>模板目录条目</small><el-tag v-for="entry in form.template_checks.toc_entries" :key="entry" effect="plain">{{ entry }}</el-tag></div>
+            <el-collapse>
+              <el-collapse-item v-if="form.template_checks.check_code_style && form.template_checks.code_style" title="代码块格式" name="code"><ScopeFields :value="form.template_checks.code_style" /></el-collapse-item>
+              <el-collapse-item v-if="form.template_checks.check_figure_numbering && form.template_checks.figure_caption_style" title="图片题注格式" name="figure"><ScopeFields :value="form.template_checks.figure_caption_style" /></el-collapse-item>
+              <el-collapse-item v-if="form.template_checks.check_table_numbering && form.template_checks.table_caption_style" title="表格题注格式" name="table"><ScopeFields :value="form.template_checks.table_caption_style" /></el-collapse-item>
+            </el-collapse>
+          </div>
+        </el-tab-pane>
       </el-tabs>
     </el-form>
   </section>
@@ -52,7 +68,7 @@ function scope(value?: ScopeRule | null): ScopeRule {
 }
 function reset() {
   const source = structuredClone(toRaw(props.rule?.ruleset ?? props.draft ?? {name:'自定义格式规则'}));
-  form.value = {...source,body:scope(source.body),title:scope(source.title),headings:Object.fromEntries(levels.map(level=>[level,scope(source.headings?.[level])])),page:{...source.page},heading_structure:{...source.heading_structure},template_regions:source.template_regions?.map(region=>({...region,heading_style:scope(region.heading_style),body_style:region.body_style?scope(region.body_style):null}))};
+  form.value = {...source,body:scope(source.body),title:scope(source.title),headings:Object.fromEntries(levels.map(level=>[level,scope(source.headings?.[level])])),page:{...source.page},heading_structure:{...source.heading_structure},template_regions:source.template_regions?.map(region=>({...region,heading_style:scope(region.heading_style),body_style:region.body_style?scope(region.body_style):null})),template_checks:source.template_checks?{...source.template_checks,code_style:source.template_checks.code_style?scope(source.template_checks.code_style):null,figure_caption_style:source.template_checks.figure_caption_style?scope(source.template_checks.figure_caption_style):null,table_caption_style:source.template_checks.table_caption_style?scope(source.template_checks.table_caption_style):null}:null};
   baseline.value = JSON.stringify(form.value);
 }
 function cleaned(): RuleSet {
@@ -68,5 +84,5 @@ onMounted(()=>window.addEventListener('beforeunload',beforeUnload));
 onBeforeUnmount(()=>window.removeEventListener('beforeunload',beforeUnload));
 </script>
 <style scoped>
-.editor{min-height:460px;color:#31415f}header{display:flex;justify-content:space-between;gap:16px;margin-bottom:20px}header small{color:#8495b0;font-size:10px}h3{margin:5px 0}h3 span{color:#c17d37;font-size:12px}header p{font-size:12px;color:#8693a8}.actions{display:flex;flex-wrap:wrap;gap:5px;align-items:start}.heading-card{padding:12px 16px;margin:12px 0;border:1px solid #e7ecf5;border-radius:10px;background:#fbfcff}.heading-card h4{margin:4px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;padding-top:16px}.grid label{display:grid;gap:6px;font-size:12px}.grid :deep(.el-input-number){width:100%}.template-region-list{display:grid;gap:12px;padding-top:12px}.template-region-card{padding:14px 16px;border:1px solid #e2e8f2;border-radius:10px;background:#fbfcff}.template-region-head,.template-region-head>div,.template-region-options{display:flex;align-items:center;gap:10px}.template-region-head{justify-content:space-between}.template-region-head strong{color:#31415f}.template-region-options .el-select{width:120px}.template-region-card :deep(.el-collapse){margin-top:10px;border-bottom:0}.template-region-card :deep(.el-collapse-item__wrap){background:transparent}.template-region-card :deep(.el-collapse-item__content){padding:10px 0}@media(max-width:760px){header{flex-direction:column}.template-region-head{align-items:stretch;flex-direction:column}.template-region-options{flex-wrap:wrap}}
+.editor{min-height:460px;color:#31415f}header{display:flex;justify-content:space-between;gap:16px;margin-bottom:20px}header small{color:#8495b0;font-size:10px}h3{margin:5px 0}h3 span{color:#c17d37;font-size:12px}header p{font-size:12px;color:#8693a8}.actions{display:flex;flex-wrap:wrap;gap:5px;align-items:start}.heading-card{padding:12px 16px;margin:12px 0;border:1px solid #e7ecf5;border-radius:10px;background:#fbfcff}.heading-card h4{margin:4px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;padding-top:16px}.grid label{display:grid;gap:6px;font-size:12px}.grid :deep(.el-input-number){width:100%}.template-region-list{display:grid;gap:12px;padding-top:12px}.template-region-card{padding:14px 16px;border:1px solid #e2e8f2;border-radius:10px;background:#fbfcff}.template-region-head,.template-region-head>div,.template-region-options{display:flex;align-items:center;gap:10px}.template-region-head{justify-content:space-between}.template-region-head strong{color:#31415f}.template-region-options .el-select{width:120px}.template-region-card :deep(.el-collapse){margin-top:10px;border-bottom:0}.template-region-card :deep(.el-collapse-item__wrap){background:transparent}.template-region-card :deep(.el-collapse-item__content){padding:10px 0}.document-check-editor{display:grid;gap:16px;padding-top:14px}.document-check-options{display:flex;flex-wrap:wrap;gap:10px 20px}.toc-entries{display:flex;flex-wrap:wrap;gap:7px;padding:12px;border-radius:9px;background:#f7f9fc}.toc-entries small{width:100%;color:#8495b0}@media(max-width:760px){header{flex-direction:column}.template-region-head{align-items:stretch;flex-direction:column}.template-region-options{flex-wrap:wrap}}
 </style>

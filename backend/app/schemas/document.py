@@ -5,9 +5,11 @@ ParsedDocument 由 services/docx_parser.py 产出，字段与规则引擎消费�
 
 from datetime import datetime
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
-PARSER_VERSION = 4
+PARSER_VERSION = 6
 
 
 class FontInfo(BaseModel):
@@ -35,6 +37,8 @@ class ParsedParagraph(BaseModel):
     first_line_indent_chars: float | None = None
     numbered: bool = False
     bullet: bool = False
+    role: Literal["title", "heading", "toc", "body", "code", "figure_caption", "table_caption"] = "body"
+    toc_level: int | None = Field(default=None, ge=1, le=9)
 
 
 class ParsedRun(BaseModel):

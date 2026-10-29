@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from app.schemas.document import ParsedParagraph, FontInfo
 from app.schemas.rule import (
     FontRule, ParagraphRule, PageRule, RuleSet, ScopeRule,
-    HeadingStructureRule, TemplateRegionRule,
+    HeadingStructureRule, TemplateRegionRule, TemplateDocumentChecks,
 )
 from app.services.docx_parser import parse_docx
 
@@ -45,7 +45,7 @@ _CODE_HINT = re.compile(r"(?:[{};]|=>|==|!=|\b(?:class|public|private|function|c
 def _is_prose(paragraph: ParsedParagraph) -> bool:
     """只从自然语言正文归纳章节样式，避免代码、图题和表题污染规则。"""
     text = paragraph.text.strip()
-    if paragraph.level is not None or paragraph.is_title or len(text) < 8 or _CAPTION.match(text):
+    if paragraph.role != "body" or paragraph.level is not None or paragraph.is_title or len(text) < 8 or _CAPTION.match(text):
         return False
     if _CODE_HINT.search(text) and sum(text.count(char) for char in "{};()=") >= 3:
         return False
@@ -67,6 +67,41 @@ def _dominant_body_style(paragraphs: list[ParsedParagraph]) -> ScopeRule | None:
         count, _ = groups.get(signature, (0, style))
         groups[signature] = (count + 1, style)
     return max(groups.values(), key=lambda item: item[0])[1] if groups else None
+
+
+def _dominant_role_style(paragraphs: list[ParsedParagraph], role: str) -> ScopeRule | None:
+    groups: dict[str, tuple[int, ScopeRule]] = {}
+    for paragraph in paragraphs:
+        if paragraph.role != role or not paragraph.text.strip():
+            continue
+        style = _scope(paragraph)
+        signature = json.dumps(style.model_dump(exclude_none=True), sort_keys=True, ensure_ascii=False)
+        count, _ = groups.get(signature, (0, style))
+        groups[signature] = (count + 1, style)
+    return max(groups.values(), key=lambda item: item[0])[1] if groups else None
+
+
+def _toc_text(text: str) -> str:
+    return re.sub(r"(?:\t|[.．·…\s])+(?:\d+|[IVXLCDM]+)\s*$", "", text, flags=re.I).strip()
+
+
+def _document_checks(parsed) -> TemplateDocumentChecks | None:
+    toc_entries = [_toc_text(p.text) for p in parsed.paragraphs if p.role == "toc" and _toc_text(p.text)]
+    has_figures = any(p.role == "figure_caption" for p in parsed.paragraphs)
+    has_tables = any(p.role == "table_caption" for p in parsed.paragraphs)
+    has_code = any(p.role == "code" for p in parsed.paragraphs)
+    if not (toc_entries or has_figures or has_tables or has_code):
+        return None
+    return TemplateDocumentChecks(
+        check_toc=bool(toc_entries),
+        toc_entries=toc_entries[:300],
+        check_figure_numbering=has_figures,
+        check_table_numbering=has_tables,
+        check_code_style=has_code,
+        code_style=_dominant_role_style(parsed.paragraphs, "code"),
+        figure_caption_style=_dominant_role_style(parsed.paragraphs, "figure_caption"),
+        table_caption_style=_dominant_role_style(parsed.paragraphs, "table_caption"),
+    )
 
 
 def _extract_regions(parsed) -> list[TemplateRegionRule]:
@@ -125,8 +160,10 @@ def extract_candidates(path: str | Path, name: str | None = None, filename: str 
         raise ValueError("文本模板没有可用于提取格式的正文或标题")
     page = PageRule.model_validate(parsed.sections[0].model_dump(exclude={"index"})) if parsed.sections else None
     regions = _extract_regions(parsed)
+    document_checks = _document_checks(parsed)
     ruleset = RuleSet(name=(name or Path(original_name).stem).strip()[:200],
-                      description=f"从文本模板《{original_name}》提取；请确认章节区域和检查方式后创建规则。", page=page)
+                      description=f"从文本模板《{original_name}》提取；请确认章节区域和检查方式后创建规则。",
+                      page=page, template_checks=document_checks)
     headings = [p for p in parsed.paragraphs if p.level is not None and not p.is_title and p.text.strip()]
     if headings:
         ruleset.heading_structure = HeadingStructureRule(max_level=max(p.level for p in headings),

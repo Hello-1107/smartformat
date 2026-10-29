@@ -44,6 +44,8 @@ export interface ParsedParagraph {
   first_line_indent_chars: number | null;
   numbered: boolean;
   bullet: boolean;
+  role?: "title" | "heading" | "toc" | "body" | "code" | "figure_caption" | "table_caption";
+  toc_level?: number | null;
 }
 
 export interface ParsedSection {
@@ -187,6 +189,17 @@ export interface TemplateRegionRule {
   body_style?: ScopeRule | null;
 }
 
+export interface TemplateDocumentChecks {
+  check_toc: boolean;
+  toc_entries: string[];
+  check_figure_numbering: boolean;
+  check_table_numbering: boolean;
+  check_code_style: boolean;
+  code_style?: ScopeRule | null;
+  figure_caption_style?: ScopeRule | null;
+  table_caption_style?: ScopeRule | null;
+}
+
 export interface RuleSet {
   name: string;
   description?: string | null;
@@ -196,6 +209,7 @@ export interface RuleSet {
   page?: PageRule | null;
   heading_structure?: HeadingStructureRule | null;
   template_regions?: TemplateRegionRule[] | null;
+  template_checks?: TemplateDocumentChecks | null;
 }
 
 export interface RuleItem {

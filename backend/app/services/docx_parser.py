@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from copy import deepcopy
 from typing import Iterator, Any
+import re
 from lxml import etree
 
 from docx import Document
@@ -187,6 +188,56 @@ def _heading_level(paragraph: object) -> int | None:
 
 def _is_title(paragraph: object) -> bool:
     return any((s.name or "").strip().lower() in {"title", "标题"} for s in _style_chain(paragraph.style))
+
+
+_TOC_STYLE = re.compile(r"^(?:toc|目录)\s*([1-9])$", re.I)
+_CAPTION = re.compile(r"^\s*([图表])\s*[0-9一二三四五六七八九十]+(?:[-—.．][0-9]+)*")
+_CODE_TOKEN = re.compile(
+    r"(?:[{};]|=>|==|!=|</?[A-Za-z]|@\w+|\b(?:class|interface|public|private|protected|"
+    r"function|const|let|var|import|export|return|SELECT|INSERT|UPDATE|DELETE)\b)", re.I,
+)
+_CODE_PREFIX = re.compile(
+    r"^(?:[/#*]|@\w+|</?[A-Za-z]|(?:async\s+)?(?:function|class|interface|public|private|"
+    r"protected|static|const|let|var|import|export|return|throw|if|else|for|while|try|catch|"
+    r"switch|case|new|SELECT|INSERT|UPDATE|DELETE)\b)", re.I,
+)
+
+
+def _toc_level(style_name: str) -> int | None:
+    match = _TOC_STYLE.match(style_name.strip())
+    return int(match.group(1)) if match else None
+
+
+def _paragraph_role(text: str, style_name: str, level: int | None, is_title: bool) -> tuple[str, int | None]:
+    """确定性标记段落用途，供模板审查避免把代码和题注当作正文。"""
+    if is_title:
+        return "title", None
+    if level is not None:
+        return "heading", None
+    toc_level = _toc_level(style_name)
+    if toc_level is not None:
+        return "toc", toc_level
+    caption = _CAPTION.match(text)
+    if caption:
+        return ("figure_caption" if caption.group(1) == "图" else "table_caption"), None
+    style_key = style_name.strip().casefold()
+    if any(token in style_key for token in ("code", "代码", "preformatted", "源程序")):
+        return "code", None
+    stripped = text.strip()
+    compact = re.sub(r"\s+", "", stripped)
+    ascii_count = len(re.findall(r"[A-Za-z0-9_{}();=<>/@\[\]]", compact))
+    ascii_ratio = ascii_count / len(compact) if compact else 0.0
+    code_tokens = len(_CODE_TOKEN.findall(stripped))
+    structural_line = bool(re.fullmatch(r"[{}\[\](),;]+", compact))
+    code_ending = stripped.endswith((";", "{", "}"))
+    if (
+        structural_line
+        or (_CODE_PREFIX.match(stripped) and ascii_ratio >= 0.4)
+        or (code_ending and code_tokens >= 1 and ascii_ratio >= 0.45)
+        or (code_tokens >= 2 and ascii_ratio >= 0.55)
+    ):
+        return "code", None
+    return "body", None
 
 
 def _line_spacing_value(value: object | None) -> float | None:
@@ -403,6 +454,9 @@ def parse_docx(path: str | Path) -> ParsedDocument:
     for idx, para in enumerate(doc.paragraphs):
         text = para.text or ""
         level = _heading_level(para)
+        is_title = _is_title(para)
+        style_name = para.style.name if para.style is not None else ""
+        role, toc_level = _paragraph_role(text, style_name, level, is_title)
         run = _dominant_run(para)
         font = _run_font(run, para) if run is not None else FontInfo()
         runs = [ParsedRun(text=r.text, font=_run_font(r, para)) for e in para._p.xpath("./w:r | ./w:hyperlink/w:r") if (r := Run(e, para)).text.strip()]
@@ -414,9 +468,9 @@ def parse_docx(path: str | Path) -> ParsedDocument:
             ParsedParagraph(
                 index=idx,
                 text=text,
-                style_name=(para.style.name if para.style is not None else ""),
+                style_name=style_name,
                 level=level,
-                is_title=_is_title(para),
+                is_title=is_title,
                 runs=runs,
                 font=font,
                 alignment=_paragraph_alignment(para),
@@ -435,6 +489,8 @@ def parse_docx(path: str | Path) -> ParsedDocument:
                 first_line_indent_chars=_first_line_indent_chars(para, font.size),
                 numbered=numbered,
                 bullet=bullet,
+                role=role,
+                toc_level=toc_level,
             )
         )
 

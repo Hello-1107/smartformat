@@ -92,12 +92,24 @@ test('结构模板可配置固定、可变和忽略章节并写入规则草稿',
     {id:'chapter-1',label:'第1章 概述',anchor:'第1章 概述',level:1,mode:'fixed',required:true,check_format:true,template_paragraph_index:0,heading_style:{font:{size:18}},body_style:{font:{size:12}}},
     {id:'chapter-2',label:'第2章 实现',anchor:'第2章 实现',level:1,mode:'fixed',required:true,check_format:true,template_paragraph_index:2,heading_style:{font:{size:18}},body_style:{font:{size:12}}},
   ];
-  const {state,events}=await mount('components/TemplateCandidatesDialog.vue',{extraction:{ruleset:{name:'结构规范'},warnings:[],candidates:{},regions}});
+  const checks={check_toc:true,toc_entries:['第1章 概述'],check_figure_numbering:true,check_table_numbering:false,check_code_style:true,code_style:{font:{size:10}}};
+  const {state,events}=await mount('components/TemplateCandidatesDialog.vue',{extraction:{ruleset:{name:'结构规范',template_checks:checks},warnings:[],candidates:{},regions}});
   assert.equal(state.hasRegions,true);assert.equal(state.complete,true);
-  state.regionDrafts[1].mode='variable';state.regionDrafts[0].check_format=false;state.confirm();
+  state.regionDrafts[1].mode='variable';state.regionDrafts[0].check_format=false;state.documentChecks.check_code_style=false;state.confirm();
   const result=events.find(([name])=>name==='confirm')?.[1];
   assert.equal(result.template_regions[1].mode,'variable');assert.equal(result.template_regions[0].check_format,false);
-  assert.equal(regions[1].mode,'fixed');
+  assert.equal(result.template_checks.check_code_style,false);assert.equal(checks.check_code_style,true);assert.equal(regions[1].mode,'fixed');
+});
+
+test('规则历史展示模板章节和文档级检查的版本差异',async()=>{
+  const rule={id:1,name:'模板规则',ruleset:{name:'模板规则'}};
+  const {state}=await mount('components/RuleVersionsDialog.vue',{modelValue:false,rule});
+  state.versions=[
+    {id:2,version:2,name:'模板规则',natural_language:'',created_at:'2026-01-02',ruleset:{name:'模板规则',template_regions:[{id:'a',label:'第一章',anchor:'第一章',level:1,mode:'variable',required:true,check_format:true,template_paragraph_index:0}],template_checks:{check_toc:true,toc_entries:['第一章'],check_figure_numbering:true,check_table_numbering:false,check_code_style:false}}},
+    {id:1,version:1,name:'模板规则',natural_language:'',created_at:'2026-01-01',ruleset:{name:'模板规则',template_regions:[{id:'a',label:'第一章',anchor:'第一章',level:1,mode:'fixed',required:true,check_format:true,template_paragraph_index:0}],template_checks:{check_toc:false,toc_entries:[],check_figure_numbering:false,check_table_numbering:false,check_code_style:false}}},
+  ];
+  assert.deepEqual(state.changes(0),['调整模板章节：第一章','启用目录校验','启用图片题注编号']);
+  assert.match(state.summary(state.versions[0]),/1 个模板章节.*目录图表与代码/);
 });
 
 test('工作区切换后迟到的列表不能覆盖当前页面',async()=>{
