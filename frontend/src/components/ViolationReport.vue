@@ -34,7 +34,7 @@
         <el-table-column prop="category" label="类别" width="100">
           <template #default="{ row }">{{ catLabel(row.category) }}</template>
         </el-table-column>
-        <el-table-column prop="field" label="字段" width="150" />
+        <el-table-column prop="field" label="字段" width="150"><template #default="{ row }">{{ fieldLabel(row.field) }}</template></el-table-column>
         <el-table-column label="期望值" width="140">
           <template #default="{ row }">{{ fmt(row.expected) }}</template>
         </el-table-column>
@@ -82,18 +82,28 @@ const CAT: Record<string, string> = {
   paragraph: "段落",
   page: "页面",
   heading_structure: "标题结构",
+  template_structure: "模板结构",
+  template_content: "固定内容",
   coverage: "审查范围",
+};
+
+const FIELD: Record<string, string> = {
+  missing_region: "缺少章节", extra_region: "多余章节", region_order: "章节顺序", anchor_text: "章节标题",
 };
 
 function catLabel(c: string): string {
   return CAT[c] ?? c;
 }
 
+function fieldLabel(field: string): string { return FIELD[field] ?? field; }
+
 function scopeLabel(s: string): string {
   if (s === "title") return "大标题";
   if (s === "body") return "正文";
   if (s === "page") return "页面";
   if (s === "heading_structure") return "标题结构";
+  if (s === "template_structure") return "模板结构";
+  if (s.startsWith("template_region:")) return `模板章节 · ${s.slice("template_region:".length)}`;
   if (/^h[1-6]$/.test(s)) return `${s[1]} 级标题`;
   return s;
 }

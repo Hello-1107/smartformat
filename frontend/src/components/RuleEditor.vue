@@ -1,6 +1,6 @@
 <template>
   <section class="editor">
-    <header><div><small>RULE CONFIGURATION</small><h3>{{ rule ? '规则编辑器' : '新建规则' }}<span v-if="isDirty"> · 未保存</span></h3><p>大标题与一级标题分别配置；空白参数表示不限制。</p></div>
+    <header><div><small>RULE CONFIGURATION</small><h3>{{ rule ? '规则编辑器' : '新建规则' }}<span v-if="isDirty"> · 未保存</span></h3><p>{{ form.template_regions?.length ? '按模板章节锚点映射并分区审查；可继续调整区域用途和样式。' : '大标题与一级标题分别配置；空白参数表示不限制。' }}</p></div>
       <div class="actions"><el-button @click="emit('new')">新建规则</el-button><el-button v-if="rule" @click="emit('save-template', cleaned())">存为模板</el-button><el-button v-if="rule" @click="emit('versions')">版本历史</el-button><el-button @click="reset">还原</el-button><el-button type="primary" :loading="saving" :disabled="!form.name.trim()" @click="emit('save', cleaned())">{{ rule ? '保存规则' : '创建规则' }}</el-button></div>
     </header>
     <el-form label-position="top" :disabled="saving">
@@ -14,6 +14,24 @@
           <label v-for="field in pageFields" :key="field.key">{{ field.label }}（cm）<el-input-number v-model="form.page![field.key]" :min="0" :max="200" :step="0.1" controls-position="right" /></label>
           <label>最大标题层级<el-input-number v-model="form.heading_structure!.max_level" :min="1" :max="6" /></label>
           <label>标题必须编号<el-select v-model="form.heading_structure!.require_numbered" clearable placeholder="不限制"><el-option label="是" :value="true" /><el-option label="否" :value="false" /></el-select></label></div>
+        </el-tab-pane>
+        <el-tab-pane v-if="form.template_regions?.length" label="模板章节">
+          <div class="template-region-list">
+            <article v-for="region in form.template_regions" :key="region.id" class="template-region-card">
+              <div class="template-region-head">
+                <div><el-tag size="small" effect="plain">{{ region.level === 0 ? '大标题' : `${region.level} 级标题` }}</el-tag><strong>{{ region.label }}</strong></div>
+                <div class="template-region-options">
+                  <el-select v-model="region.mode"><el-option label="固定章节" value="fixed" /><el-option label="可变章节" value="variable" /><el-option label="忽略区域" value="ignore" /></el-select>
+                  <el-checkbox v-model="region.required" :disabled="region.mode === 'ignore'">必须存在</el-checkbox>
+                  <el-checkbox v-model="region.check_format" :disabled="region.mode === 'ignore'">检查格式</el-checkbox>
+                </div>
+              </div>
+              <el-collapse v-if="region.mode !== 'ignore' && region.check_format">
+                <el-collapse-item title="标题格式" name="heading"><ScopeFields :value="region.heading_style!" /></el-collapse-item>
+                <el-collapse-item v-if="region.body_style" title="本章节正文格式" name="body"><ScopeFields :value="region.body_style" /></el-collapse-item>
+              </el-collapse>
+            </article>
+          </div>
         </el-tab-pane>
       </el-tabs>
     </el-form>
@@ -34,7 +52,7 @@ function scope(value?: ScopeRule | null): ScopeRule {
 }
 function reset() {
   const source = structuredClone(toRaw(props.rule?.ruleset ?? props.draft ?? {name:'自定义格式规则'}));
-  form.value = {...source,body:scope(source.body),title:scope(source.title),headings:Object.fromEntries(levels.map(level=>[level,scope(source.headings?.[level])])),page:{...source.page},heading_structure:{...source.heading_structure}};
+  form.value = {...source,body:scope(source.body),title:scope(source.title),headings:Object.fromEntries(levels.map(level=>[level,scope(source.headings?.[level])])),page:{...source.page},heading_structure:{...source.heading_structure},template_regions:source.template_regions?.map(region=>({...region,heading_style:scope(region.heading_style),body_style:region.body_style?scope(region.body_style):null}))};
   baseline.value = JSON.stringify(form.value);
 }
 function cleaned(): RuleSet {
@@ -50,5 +68,5 @@ onMounted(()=>window.addEventListener('beforeunload',beforeUnload));
 onBeforeUnmount(()=>window.removeEventListener('beforeunload',beforeUnload));
 </script>
 <style scoped>
-.editor{min-height:460px;color:#31415f}header{display:flex;justify-content:space-between;gap:16px;margin-bottom:20px}header small{color:#8495b0;font-size:10px}h3{margin:5px 0}h3 span{color:#c17d37;font-size:12px}header p{font-size:12px;color:#8693a8}.actions{display:flex;flex-wrap:wrap;gap:5px;align-items:start}.heading-card{padding:12px 16px;margin:12px 0;border:1px solid #e7ecf5;border-radius:10px;background:#fbfcff}.heading-card h4{margin:4px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;padding-top:16px}.grid label{display:grid;gap:6px;font-size:12px}.grid :deep(.el-input-number){width:100%}@media(max-width:760px){header{flex-direction:column}}
+.editor{min-height:460px;color:#31415f}header{display:flex;justify-content:space-between;gap:16px;margin-bottom:20px}header small{color:#8495b0;font-size:10px}h3{margin:5px 0}h3 span{color:#c17d37;font-size:12px}header p{font-size:12px;color:#8693a8}.actions{display:flex;flex-wrap:wrap;gap:5px;align-items:start}.heading-card{padding:12px 16px;margin:12px 0;border:1px solid #e7ecf5;border-radius:10px;background:#fbfcff}.heading-card h4{margin:4px 0}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;padding-top:16px}.grid label{display:grid;gap:6px;font-size:12px}.grid :deep(.el-input-number){width:100%}.template-region-list{display:grid;gap:12px;padding-top:12px}.template-region-card{padding:14px 16px;border:1px solid #e2e8f2;border-radius:10px;background:#fbfcff}.template-region-head,.template-region-head>div,.template-region-options{display:flex;align-items:center;gap:10px}.template-region-head{justify-content:space-between}.template-region-head strong{color:#31415f}.template-region-options .el-select{width:120px}.template-region-card :deep(.el-collapse){margin-top:10px;border-bottom:0}.template-region-card :deep(.el-collapse-item__wrap){background:transparent}.template-region-card :deep(.el-collapse-item__content){padding:10px 0}@media(max-width:760px){header{flex-direction:column}.template-region-head{align-items:stretch;flex-direction:column}.template-region-options{flex-wrap:wrap}}
 </style>

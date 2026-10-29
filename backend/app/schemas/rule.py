@@ -88,6 +88,21 @@ class HeadingStructureRule(RuleModel):
     )
 
 
+class TemplateRegionRule(RuleModel):
+    """从完整 Word 模板识别出的章节区域。"""
+
+    id: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=200)
+    anchor: str = Field(min_length=1, max_length=500)
+    level: int = Field(ge=0, le=6, description="0 表示文档大标题，1..6 表示标题层级")
+    mode: Literal["fixed", "variable", "ignore"] = "fixed"
+    required: bool = True
+    check_format: bool = True
+    template_paragraph_index: int = Field(ge=0)
+    heading_style: ScopeRule | None = None
+    body_style: ScopeRule | None = None
+
+
 class RuleSet(RuleModel):
     name: str = Field(min_length=1, max_length=200)
     description: str | None = None
@@ -96,6 +111,7 @@ class RuleSet(RuleModel):
     headings: dict[HeadingKey, ScopeRule] | None = None
     page: PageRule | None = None
     heading_structure: HeadingStructureRule | None = None
+    template_regions: list[TemplateRegionRule] | None = Field(default=None, max_length=300)
 
     @field_validator("name")
     @classmethod
@@ -109,7 +125,12 @@ class RuleSet(RuleModel):
             if isinstance(value, dict):
                 return any(contains(v) for k, v in value.items() if k != "line_spacing_kind")
             return value is not None
-        return any(contains(self.model_dump().get(key)) for key in ("body", "title", "headings", "page", "heading_structure"))
+        regular = any(contains(self.model_dump().get(key)) for key in ("body", "title", "headings", "page", "heading_structure"))
+        structural = any(
+            region.mode != "ignore" and (region.required or region.check_format)
+            for region in self.template_regions or []
+        )
+        return regular or structural
 
 
 class RuleCreate(BaseModel):

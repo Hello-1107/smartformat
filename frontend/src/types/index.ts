@@ -174,6 +174,19 @@ export interface HeadingStructureRule {
   require_numbered?: boolean | null;
 }
 
+export interface TemplateRegionRule {
+  id: string;
+  label: string;
+  anchor: string;
+  level: number;
+  mode: "fixed" | "variable" | "ignore";
+  required: boolean;
+  check_format: boolean;
+  template_paragraph_index: number;
+  heading_style?: ScopeRule | null;
+  body_style?: ScopeRule | null;
+}
+
 export interface RuleSet {
   name: string;
   description?: string | null;
@@ -182,6 +195,7 @@ export interface RuleSet {
   headings?: Record<string, ScopeRule> | null;
   page?: PageRule | null;
   heading_structure?: HeadingStructureRule | null;
+  template_regions?: TemplateRegionRule[] | null;
 }
 
 export interface RuleItem {
@@ -257,6 +271,7 @@ export interface StyleCandidate {
 export interface TemplateExtraction {
   ruleset: RuleSet;
   candidates: Record<string, StyleCandidate[]>;
+  regions?: TemplateRegionRule[];
   warnings: string[];
 }
 

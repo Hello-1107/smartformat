@@ -18,6 +18,7 @@ from app.schemas.rule import (
     ParagraphRule,
     RuleSet,
     ScopeRule,
+    TemplateRegionRule,
 )
 
 # 常见中文字体名 ↔ 英文字体名 归一化映射
@@ -285,6 +286,156 @@ def _resolve_scope(
     return None
 
 
+_ANCHOR_PREFIX = re.compile(
+    r"^\s*(?:第\s*[0-9一二三四五六七八九十百]+\s*[章节篇部]|"
+    r"[0-9]+(?:[.．-][0-9]+)*\s*[、.．]?|[一二三四五六七八九十]+[、.．])\s*"
+)
+_CAPTION = re.compile(r"^\s*(?:图|表)\s*[0-9一二三四五六七八九十]+(?:[-—.．][0-9]+)*")
+_CODE_HINT = re.compile(r"(?:[{};]|=>|==|!=|\b(?:class|public|private|function|const|let|var|import|return)\b)")
+
+
+def _normal_anchor(text: str) -> str:
+    return re.sub(r"[\s\u3000]+", "", text).strip("：:、,.．。-—_").casefold()
+
+
+def _semantic_anchor(text: str) -> str:
+    return _normal_anchor(_ANCHOR_PREFIX.sub("", text))
+
+
+def _compatible_anchor(paragraph: ParsedParagraph, region: TemplateRegionRule) -> bool:
+    return paragraph.is_title if region.level == 0 else paragraph.level == region.level
+
+
+def _is_prose(paragraph: ParsedParagraph) -> bool:
+    text = paragraph.text.strip()
+    if paragraph.level is not None or paragraph.is_title or len(text) < 8 or _CAPTION.match(text):
+        return False
+    if _CODE_HINT.search(text) and sum(text.count(char) for char in "{};()=") >= 3:
+        return False
+    compact = re.sub(r"\s+", "", text)
+    if not compact:
+        return False
+    cjk = len(re.findall(r"[\u3400-\u9fff]", compact))
+    letters = len(re.findall(r"[A-Za-z]", compact))
+    return cjk / len(compact) >= 0.12 or (letters / len(compact) >= 0.65 and not _CODE_HINT.search(text))
+
+
+def _add_template_issue(
+    violations: list[Violation], region: TemplateRegionRule | None, field: str,
+    expected: object, actual: object, message: str,
+    paragraph: ParsedParagraph | None = None,
+) -> None:
+    violations.append(Violation(
+        scope=f"template_region:{region.label[:40]}" if region else "template_structure",
+        category="template_structure" if field not in {"anchor_text"} else "template_content",
+        field=field,
+        expected=expected,
+        actual=actual,
+        message=message,
+        paragraph_index=paragraph.index if paragraph else None,
+        paragraph_text=paragraph.text[:60] if paragraph and paragraph.text else None,
+        severity="error",
+    ))
+
+
+def _check_region_style(
+    violations: list[Violation], region: TemplateRegionRule,
+    heading: ParsedParagraph, body_end: int, parsed: ParsedDocument,
+) -> None:
+    scope = f"template_region:{region.label[:40]}"
+    if region.heading_style is not None:
+        if region.heading_style.font is not None:
+            _check_font(violations, scope, heading.font, region.heading_style.font, heading)
+        if region.heading_style.paragraph is not None:
+            _check_paragraph(violations, scope, heading, region.heading_style.paragraph)
+    if region.body_style is None:
+        return
+    for paragraph in parsed.paragraphs[heading.index + 1:body_end]:
+        if not _is_prose(paragraph):
+            continue
+        if region.body_style.font is not None:
+            _check_font(violations, scope, paragraph.font, region.body_style.font, paragraph)
+        if region.body_style.paragraph is not None:
+            _check_paragraph(violations, scope, paragraph, region.body_style.paragraph)
+
+
+def _check_template_regions(
+    violations: list[Violation], parsed: ParsedDocument,
+    regions: list[TemplateRegionRule],
+) -> None:
+    anchors = [
+        paragraph for paragraph in parsed.paragraphs
+        if paragraph.text.strip() and (paragraph.is_title or paragraph.level is not None)
+    ]
+    consumed: set[int] = set()
+    matched: list[tuple[TemplateRegionRule, int, ParsedParagraph]] = []
+    cursor = 0
+
+    for region in regions:
+        expected_key = _normal_anchor(region.anchor)
+        semantic_key = _semantic_anchor(region.anchor)
+        compatible = [
+            index for index in range(cursor, len(anchors))
+            if index not in consumed and _compatible_anchor(anchors[index], region)
+        ]
+        exact = [index for index in compatible if _normal_anchor(anchors[index].text) == expected_key]
+        semantic = [index for index in compatible if _semantic_anchor(anchors[index].text) == semantic_key]
+        found = (exact or semantic or (compatible[:1] if region.mode == "variable" else []))
+
+        if not found:
+            previous = next((
+                index for index in range(0, cursor)
+                if index not in consumed and _compatible_anchor(anchors[index], region)
+                and _semantic_anchor(anchors[index].text) == semantic_key
+            ), None)
+            if previous is not None:
+                paragraph = anchors[previous]
+                consumed.add(previous)
+                matched.append((region, previous, paragraph))
+                if region.mode != "ignore":
+                    _add_template_issue(
+                        violations, region, "region_order", region.anchor, paragraph.text,
+                        f"章节「{region.label}」出现顺序与模板不一致", paragraph,
+                    )
+                continue
+            if region.required and region.mode != "ignore":
+                _add_template_issue(
+                    violations, region, "missing_region", region.anchor, None,
+                    f"缺少模板要求的章节「{region.label}」",
+                )
+            continue
+
+        anchor_position = found[0]
+        paragraph = anchors[anchor_position]
+        consumed.add(anchor_position)
+        matched.append((region, anchor_position, paragraph))
+        cursor = anchor_position + 1
+        if region.mode == "fixed" and _normal_anchor(paragraph.text) != expected_key:
+            _add_template_issue(
+                violations, region, "anchor_text", region.anchor, paragraph.text,
+                f"章节标题应为「{region.anchor}」，实际为「{paragraph.text}」", paragraph,
+            )
+
+    active_levels = {region.level for region in regions if region.mode != "ignore"}
+    positive_levels = {level for level in active_levels if level > 0}
+    # 模板通常只列出推荐的小节，待审报告允许在章内继续展开；仅把新增的
+    # 文档大标题或最高层级章节视为结构差异，避免把实现细节误报为多余章节。
+    extra_levels = ({0} if 0 in active_levels else set()) | ({min(positive_levels)} if positive_levels else set())
+    for index, paragraph in enumerate(anchors):
+        level = 0 if paragraph.is_title else int(paragraph.level or 0)
+        if index not in consumed and level in extra_levels:
+            _add_template_issue(
+                violations, None, "extra_region", "模板中已配置的章节", paragraph.text,
+                f"发现模板之外的章节「{paragraph.text[:60]}」", paragraph,
+            )
+
+    for region, anchor_position, paragraph in matched:
+        if region.mode == "ignore" or not region.check_format:
+            continue
+        body_end = anchors[anchor_position + 1].index if anchor_position + 1 < len(anchors) else len(parsed.paragraphs)
+        _check_region_style(violations, region, paragraph, body_end, parsed)
+
+
 def run_check(parsed: ParsedDocument, ruleset: RuleSet) -> tuple[list[Violation], CheckSummary]:
     """对解析结果执行规则，返回 (违规列表, 汇总)。"""
     violations: list[Violation] = []
@@ -321,6 +472,12 @@ def run_check(parsed: ParsedDocument, ruleset: RuleSet) -> tuple[list[Violation]
                 _check_font(violations, scope, para.font, scope_rule.font, para)
         if scope_rule.paragraph is not None:
             _check_paragraph(violations, scope, para, scope_rule.paragraph)
+
+    if ruleset.template_regions:
+        active_regions = [region for region in ruleset.template_regions if region.mode != "ignore"]
+        if active_regions:
+            applicable = True
+            _check_template_regions(violations, parsed, ruleset.template_regions)
 
     if ruleset.heading_structure is not None:
         applicable = applicable or ruleset.heading_structure.max_level is not None or ruleset.heading_structure.require_numbered is True

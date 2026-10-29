@@ -78,6 +78,28 @@ test('候选必须明确选择，大标题与一级标题写入不同作用域',
   assert.equal(result.title.font.size,28);assert.equal(result.headings.h1.font.size,16);
 });
 
+test('候选样式以可读摘要显示，不暴露原始样式 JSON',async()=>{
+  const candidate={id:'body',scope:'body',count:1,examples:['原文'],paragraph_indexes:[0],style:{font:{name:'宋体',ascii_name:'Times New Roman',size:12,bold:false},paragraph:{alignment:'justify',line_spacing:1.5,line_spacing_kind:'multiple',space_before:0,space_after:0,first_line_indent_chars:2,numbered:false,bullet:false}}};
+  const {state}=await mount('components/TemplateCandidatesDialog.vue',{extraction:{ruleset:{name:'规范'},warnings:[],candidates:{body:[candidate]}}});
+  assert.match(state.describe(candidate),/宋体 · Times New Roman · 12pt · 不加粗 · 两端对齐 · 行距 1.5 倍/);
+  assert.deepEqual(state.details(candidate),[{label:'段前',value:'0 磅'},{label:'段后',value:'0 磅'},{label:'首行缩进',value:'2 字符'}]);
+  const source=await readFile(new URL('../src/components/TemplateCandidatesDialog.vue',import.meta.url),'utf8');
+  assert.doesNotMatch(source,/JSON\.stringify\(candidate\.style\)/);
+});
+
+test('结构模板可配置固定、可变和忽略章节并写入规则草稿',async()=>{
+  const regions=[
+    {id:'chapter-1',label:'第1章 概述',anchor:'第1章 概述',level:1,mode:'fixed',required:true,check_format:true,template_paragraph_index:0,heading_style:{font:{size:18}},body_style:{font:{size:12}}},
+    {id:'chapter-2',label:'第2章 实现',anchor:'第2章 实现',level:1,mode:'fixed',required:true,check_format:true,template_paragraph_index:2,heading_style:{font:{size:18}},body_style:{font:{size:12}}},
+  ];
+  const {state,events}=await mount('components/TemplateCandidatesDialog.vue',{extraction:{ruleset:{name:'结构规范'},warnings:[],candidates:{},regions}});
+  assert.equal(state.hasRegions,true);assert.equal(state.complete,true);
+  state.regionDrafts[1].mode='variable';state.regionDrafts[0].check_format=false;state.confirm();
+  const result=events.find(([name])=>name==='confirm')?.[1];
+  assert.equal(result.template_regions[1].mode,'variable');assert.equal(result.template_regions[0].check_format,false);
+  assert.equal(regions[1].mode,'fixed');
+});
+
 test('工作区切换后迟到的列表不能覆盖当前页面',async()=>{
   const {state}=await mount('views/HomeView.vue');const m=globalThis.__reviewMocks;
   const pending=deferred();m.documentApi.list=()=>pending.promise;
