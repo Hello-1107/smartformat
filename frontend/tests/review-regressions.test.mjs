@@ -74,6 +74,21 @@ test('工作区问题分布与报告使用相同中文类别标签', async()=>{
   assert.match(dashboard,/\.category-name \{[^}]*text-overflow: ellipsis/);
 });
 
+test('表单填写要求修改后旧规则不再被静默执行', async()=>{
+  const {state}=await mount('components/TemplateAuditPanel.vue',{
+    workspaceId:null,documents:[],selectedDocumentId:null,acceptedFixes:[],
+  });
+  const block=reactive({id:'people',label:'家庭人口数',mode:'variable',rules:[{kind:'exact_text',text:'6人'}],
+    requirement_text:'人数要写6人',unsupported_requirements:[]});
+  state.openRequirements(block);
+  assert.equal(state.requirementText,'人数要写6人');
+  state.onRequirementInput('人数填写数字即可');
+  assert.deepEqual(block.rules,[]);
+  assert.deepEqual(block.unsupported_requirements,['人数填写数字即可']);
+  state.clearUnsupported();
+  assert.deepEqual(block.unsupported_requirements,[]);
+});
+
 test('预设模板解除 Vue 代理后可创建独立草稿',async()=>{
   const {state}=await mount('views/HomeView.vue');
   const template=reactive({id:'system',name:'规范',ruleset:{name:'规范',body:{font:{size:12}}}});

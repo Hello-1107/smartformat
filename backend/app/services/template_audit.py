@@ -267,12 +267,14 @@ def _normal_text(value: str) -> str:
     return re.sub(r"\s+", " ", value).strip()
 
 
-def _valid_data_type(value: str, data_type: str) -> bool:
+def _valid_data_type(value: str, data_type: str, rules: list[TemplateFieldRule] | None = None) -> bool:
     text = value.strip()
     if data_type == "text":
         return True
     if data_type == "number":
-        return bool(re.fullmatch(r"[-+]?\d+(?:\.\d+)?(?:岁|人)?", text))
+        units = {"岁", "人"} | {rule.text.strip() for rule in (rules or []) if rule.kind == "number_with_unit"}
+        suffix = "|".join(re.escape(unit) for unit in sorted(units, key=len, reverse=True) if unit)
+        return bool(re.fullmatch(r"[-+]?\d+(?:\.\d+)?(?:" + suffix + r")?", text))
     if data_type == "date":
         return bool(re.fullmatch(
             r"(?:\d{4}年\d{1,2}月(?:\d{1,2}日)?|\d{4}[-/.]\d{1,2}(?:[-/.]\d{1,2})?)",
@@ -311,6 +313,23 @@ def draft_field_requirements(text: str) -> TemplateRequirementDraftResult:
         if compact in {"必填", "必须填写", "不能为空", "不得为空", "该字段必填"}:
             required = True
             continue
+        # 只从明确的用户要求生成规则；样例值本身绝不推断单位或固定答案。
+        if match := re.search(r"为(.+?)时(?:不能够|不能|不得|禁止)(?:填写|填|写|使用)(.+)$", compact):
+            rules.append(TemplateFieldRule(kind="forbidden_value", text=match.group(2), replacement_text=match.group(1)))
+            continue
+        if match := re.search(r"(?:要|应|必须)(?:填写|填|写)(?:为|成)?(.+?)(?:不能够|不能|不得)(?:填写|填|写)(.+)$", compact):
+            rules.append(TemplateFieldRule(kind="exact_text", text=match.group(1)))
+            continue
+        if match := re.search(r"(?:必须|应|要)(?:填写|填|写)(?:为|成)?[：:]?([^，。,]+)$", compact):
+            rules.append(TemplateFieldRule(kind="exact_text", text=match.group(1)))
+            continue
+        if match := re.search(r"(?:不能够|不能|不得|禁止)(?:填写|填|写|使用)[：:]?([^，。,]+)$", compact):
+            rules.append(TemplateFieldRule(kind="forbidden_value", text=match.group(1)))
+            continue
+        if match := re.search(r"(?:数字后(?:必须|应|要)?(?:加|带)|(?:必须|应|要)带)([^，。,]{1,10})字?$", compact):
+            unit = match.group(1).removesuffix("字")
+            rules.append(TemplateFieldRule(kind="number_with_unit", text=unit))
+            continue
         length = re.search(r"(\d+)\s*(?:[-~～—–至到])\s*(\d+)\s*(?:个)?(汉字|字|字符)", compact)
         number = re.search(r"(\d+(?:\.\d+)?)\s*(?:[-~～—–至到])\s*(\d+(?:\.\d+)?)\s*(?:人|岁|元|分)?", compact)
         if ("邮箱" in compact or "电子邮件" in compact) and ("格式" in compact or "有效" in compact or "符合" in compact):
@@ -334,6 +353,12 @@ def draft_field_requirements(text: str) -> TemplateRequirementDraftResult:
 
 
 def _field_rule_description(rule: TemplateFieldRule, labels: dict[str, str]) -> str:
+    if rule.kind == "exact_text":
+        return f"必须填写「{rule.text}」"
+    if rule.kind == "forbidden_value":
+        return f"不得填写「{rule.text}」" + (f"；核实后建议使用「{rule.replacement_text}」" if rule.replacement_text else "")
+    if rule.kind == "number_with_unit":
+        return f"数字后必须带单位「{rule.text}」"
     if rule.kind == "email":
         return "有效的电子邮箱地址"
     if rule.kind in {"length", "chinese_length"}:
@@ -350,6 +375,12 @@ def _field_rule_description(rule: TemplateFieldRule, labels: dict[str, str]) -> 
 
 def _field_rule_matches(value: str, rule: TemplateFieldRule, target_by_id: dict[str, TemplateBlock]) -> bool:
     text = value.strip()
+    if rule.kind == "exact_text":
+        return text == rule.text.strip()
+    if rule.kind == "forbidden_value":
+        return text != rule.text.strip()
+    if rule.kind == "number_with_unit":
+        return bool(re.fullmatch(r"[-+]?\d+(?:\.\d+)?" + re.escape(rule.text.strip()), text))
     if rule.kind == "email":
         return _valid_data_type(text, "email")
     if rule.kind in {"length", "chinese_length"}:
@@ -464,7 +495,7 @@ def review_against_template(template: TemplateConfiguration, document_path: str 
                 quote=value or None, recommended_replacement=block.text,
                 repairable=bool(value),
             ))
-        elif block.mode == "variable" and value.strip() and not _valid_data_type(value, block.data_type):
+        elif block.mode == "variable" and value.strip() and not _valid_data_type(value, block.data_type, block.rules):
             issues.append(TemplateIssue(
                 category="字段规范", severity="错误",
                 message=f"{block.label or block.location}应填写为{_display_data_type(block.data_type)}",
@@ -482,6 +513,8 @@ def review_against_template(template: TemplateConfiguration, document_path: str 
                         template_block_id=block.id, template_content_index=block.content_index,
                         document_content_index=actual.content_index,
                         expected=description, actual=value, quote=value,
+                        recommended_replacement=(rule.text if rule.kind == "exact_text" else
+                                                 rule.replacement_text if rule.kind == "forbidden_value" and rule.replacement_text else None),
                     ))
         if block.check_format and value.strip():
             for category, field, wanted, got in _format_differences(block.format, actual.format):

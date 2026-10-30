@@ -100,8 +100,9 @@ export const templateAuditApi = {
       template_id: templateId,
       name,
       check_page: checkPage,
-      blocks: blocks.map(({ id, label, mode, required, data_type, check_format, recognition_confirmed, rules }) => ({
-        id, label, mode, required, data_type, check_format, recognition_confirmed: recognition_confirmed ?? false, rules: rules ?? [],
+      blocks: blocks.map(({ id, label, mode, required, data_type, check_format, recognition_confirmed, rules, requirement_text, unsupported_requirements }) => ({
+        id, label, mode, required, data_type, check_format, recognition_confirmed: recognition_confirmed ?? false,
+        rules: rules ?? [], requirement_text: requirement_text ?? "", unsupported_requirements: unsupported_requirements ?? [],
       })),
     });
   },
@@ -118,10 +119,10 @@ export const templateAuditApi = {
       params: { workspace_id: workspaceId },
     });
   },
-  run(workspaceId: number, documentId: number) {
+  run(workspaceId: number, documentId: number, aiFieldIds: string[] = []) {
     return http.post<TemplateReview>("/template-audits/reviews", {
-      workspace_id: workspaceId, document_id: documentId,
-    }, { timeout: 120000 });
+      workspace_id: workspaceId, document_id: documentId, ai_field_ids: aiFieldIds,
+    }, { timeout: aiFieldIds.length ? 180000 : 120000 });
   },
   reviews(workspaceId: number, documentId: number, beforeId?: number) {
     return http.get<TemplateReview[]>("/template-audits/reviews", {

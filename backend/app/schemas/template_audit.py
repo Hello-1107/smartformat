@@ -21,13 +21,14 @@ class TemplateParagraphFormat(BaseModel):
 
 
 class TemplateFieldRule(BaseModel):
-    kind: Literal["email", "length", "chinese_length", "number_range", "allowed_values", "contains", "same_as"]
+    kind: Literal["email", "length", "chinese_length", "number_range", "allowed_values", "contains", "same_as", "exact_text", "forbidden_value", "number_with_unit"]
     min_value: float | None = Field(default=None, allow_inf_nan=False)
     max_value: float | None = Field(default=None, allow_inf_nan=False)
     min_length: int | None = Field(default=None, ge=0, le=10000)
     max_length: int | None = Field(default=None, ge=0, le=10000)
     options: list[str] = Field(default_factory=list, max_length=30)
     text: str = Field(default="", max_length=200)
+    replacement_text: str = Field(default="", max_length=200)
     other_block_id: str = Field(default="", max_length=100)
 
     @model_validator(mode="after")
@@ -44,8 +45,10 @@ class TemplateFieldRule(BaseModel):
             self.options = [value.strip() for value in self.options]
             if any(len(value) > 100 for value in self.options):
                 raise ValueError("单个可选值不能超过 100 字")
-        if self.kind == "contains" and not self.text.strip():
-            raise ValueError("包含文字规则不能为空")
+        if self.kind in {"contains", "exact_text", "forbidden_value", "number_with_unit"} and not self.text.strip():
+            raise ValueError("文字或单位规则不能为空")
+        if self.kind == "number_with_unit" and (len(self.text.strip()) > 10 or not self.text.strip().isalpha()):
+            raise ValueError("单位必须为 1–10 个文字字符")
         if self.kind == "same_as" and not self.other_block_id:
             raise ValueError("一致性规则必须指定另一字段")
         return self
@@ -82,6 +85,8 @@ class TemplateBlock(BaseModel):
     recognition_note: str = ""
     recognition_confirmed: bool = False
     rules: list[TemplateFieldRule] = Field(default_factory=list, max_length=20)
+    requirement_text: str = Field(default="", max_length=1000)
+    unsupported_requirements: list[str] = Field(default_factory=list, max_length=20)
     format: TemplateParagraphFormat = Field(default_factory=TemplateParagraphFormat)
 
 
@@ -115,6 +120,8 @@ class TemplateBlockUpdate(BaseModel):
     check_format: bool
     recognition_confirmed: bool = False
     rules: list[TemplateFieldRule] | None = Field(default=None, max_length=20)
+    requirement_text: str = Field(default="", max_length=1000)
+    unsupported_requirements: list[str] = Field(default_factory=list, max_length=20)
 
 
 class TemplateConfigurationUpdate(BaseModel):
@@ -135,6 +142,31 @@ class TemplateConfigurationUpdate(BaseModel):
 class TemplateReviewCreate(BaseModel):
     workspace_id: int
     document_id: int
+    ai_field_ids: list[str] = Field(default_factory=list, max_length=30)
+
+    @model_validator(mode="after")
+    def unique_ai_fields(self):
+        if len(self.ai_field_ids) != len(set(self.ai_field_ids)):
+            raise ValueError("AI 审查字段不能重复")
+        return self
+
+
+class TemplateAiSuggestion(BaseModel):
+    block_id: str
+    template_content_index: int | None = None
+    document_content_index: int | None = None
+    quote: str = Field(min_length=1, max_length=2000)
+    reason: str = Field(min_length=1, max_length=1000)
+    suggestion: str = Field(min_length=1, max_length=2000)
+    recommended_replacement: str | None = Field(default=None, max_length=2000)
+
+
+class TemplateAiReview(BaseModel):
+    status: Literal["completed", "failed", "not_configured"]
+    summary: str = Field(max_length=1000)
+    model: str | None = None
+    field_ids: list[str] = Field(default_factory=list)
+    suggestions: list[TemplateAiSuggestion] = Field(default_factory=list, max_length=50)
 
 
 class TemplateIssue(BaseModel):
@@ -158,6 +190,7 @@ class TemplateReviewResult(BaseModel):
     total: int
     repairable: int
     compliant: bool
+    ai_review: TemplateAiReview | None = None
 
 
 class TemplateReviewOut(TemplateReviewResult):

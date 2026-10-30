@@ -182,10 +182,20 @@ def template_report(review: TemplateReview, doc: ReportDocument) -> ReportData:
             [source], expected=_value(item.expected) if item.expected is not None else None,
             actual=_value(item.actual) if item.actual is not None else None,
         ))
+    ai = result.ai_review
+    if ai and ai.status == "completed":
+        labels = {block.get("id"): block.get("label") for block in blocks if isinstance(block, dict)}
+        for item in ai.suggestions:
+            source = (_source(doc, item.document_content_index, item.quote)
+                      if item.document_content_index is not None else
+                      ReportSource(doc.filename, f"{labels.get(item.block_id) or template_positions.get(item.block_id) or '所选字段'}，需人工定位", item.quote))
+            advice = item.suggestion + (f"；可核实的替换文字：{item.recommended_replacement}" if item.recommended_replacement else "")
+            issues.append(ReportIssue("AI填写建议", "提示", item.reason, advice, [source], actual=item.quote))
+    ai_note = (f"；DeepSeek 建议：{ai.status}（{ai.model or '未配置'}，选中 {len(ai.field_ids)} 个字段）" if ai else "；未启用 DeepSeek 建议")
     return ReportData("表单模板审查", [doc.filename], result.summary, issues,
-                      f"模板版本：{review.template_version}" + ("；使用审查时配置快照" if snapshot else "；旧记录无配置快照"),
+                      f"模板版本：{review.template_version}" + ("；使用审查时配置快照" if snapshot else "；旧记录无配置快照") + ai_note,
                       review.created_at, review.id,
-                      "缺失区域和页面级问题没有精确段落锚点，报告会标明模板位置或要求人工定位。")
+                      "缺失区域和页面级问题没有精确段落锚点，报告会标明模板位置或要求人工定位。AI 建议不改变合规结论，也不会自动修改原文。")
 
 
 def _analysis_source(ref: SourceRef, docs: dict[int, ReportDocument], kind: str) -> ReportSource:

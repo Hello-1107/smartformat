@@ -40,19 +40,22 @@
         <el-table-column label="字段类型" width="125"><template #default="{ row }"><el-select v-model="row.data_type" size="small" :disabled="row.mode !== 'variable'"><el-option label="文本" value="text" /><el-option label="数字" value="number" /><el-option label="日期" value="date" /><el-option label="身份证号" value="id_number" /><el-option label="电话号码" value="phone" /><el-option label="电子邮箱" value="email" /></el-select></template></el-table-column>
         <el-table-column label="必填" width="70" align="center"><template #default="{ row }"><el-checkbox v-model="row.required" :disabled="row.mode === 'ignore'" /></template></el-table-column>
         <el-table-column label="检查格式" width="90" align="center"><template #default="{ row }"><el-checkbox v-model="row.check_format" :disabled="row.mode === 'ignore'" /></template></el-table-column>
-        <el-table-column label="填写要求" width="110"><template #default="{ row }"><el-button link type="primary" :disabled="row.mode !== 'variable'" @click="openRequirements(row)">{{ row.rules?.length ? `${row.rules.length} 条规则` : '设置要求' }}</el-button></template></el-table-column>
+        <el-table-column label="填写要求" width="110"><template #default="{ row }"><el-button link type="primary" :disabled="row.mode !== 'variable'" @click="openRequirements(row)">{{ row.rules?.length ? `${row.rules.length} 条规则` : row.requirement_text?.trim() ? '要求待处理' : '设置要求' }}</el-button></template></el-table-column>
       </el-table>
 
       <el-dialog v-model="requirementDialog" :title="`填写要求 · ${selectedRuleBlock?.label || '字段'}`" width="min(700px, 92vw)">
-        <p class="requirement-help">输入要求后点击“生成草案”，逐条核对并可直接修改；只有保存并发布配置后才会用于审查。示例：邮箱必须是有效格式；家庭人口数为1-10人；长度2-4个汉字；只能填男、女。</p>
-        <el-input v-model="requirementText" type="textarea" :rows="3" maxlength="1000" show-word-limit placeholder="每行一条具体要求" />
-        <div class="draft-actions"><el-button :loading="draftingRequirements" @click="parseRequirements">生成规则草案</el-button><span v-if="unsupportedRequirements.length" class="uncertain">未能解析：{{ unsupportedRequirements.join('；') }}。这些要求不会自动执行。</span></div>
+        <p class="requirement-help">要求仅作用于当前字段，不从样例值推断固定答案或单位。输入后生成并核对草案，发布后才用于确定性审查。示例：人数要写6人不能写6；政治面貌为共青团员时不能够填写团员；数字后必须带人字。</p>
+        <el-input v-model="requirementText" type="textarea" :rows="3" maxlength="1000" show-word-limit placeholder="每行一条当前字段的具体要求" @input="onRequirementInput" />
+        <div class="draft-actions"><el-button :loading="draftingRequirements" @click="parseRequirements">生成规则草案</el-button><span v-if="unsupportedRequirements.length" class="uncertain">未启用：{{ unsupportedRequirements.join('；') }}。确定性审查不会执行这些要求，可选择 DeepSeek 获取建议。</span><el-button v-if="unsupportedRequirements.length && selectedRuleBlock?.rules.length" link @click="clearUnsupported">已手动配置对应规则</el-button></div>
         <div v-for="(rule, index) in selectedRuleBlock?.rules ?? []" :key="index" class="requirement-rule">
-          <el-select v-model="rule.kind" style="width:160px" @change="resetRuleParameters(rule)"><el-option label="邮箱格式" value="email" /><el-option label="字符长度" value="length" /><el-option label="汉字字数" value="chinese_length" /><el-option label="数值范围" value="number_range" /><el-option label="限定选项" value="allowed_values" /><el-option label="包含文字" value="contains" /><el-option label="与字段一致" value="same_as" /></el-select>
+          <el-select v-model="rule.kind" style="width:160px" @change="resetRuleParameters(rule)"><el-option label="邮箱格式" value="email" /><el-option label="字符长度" value="length" /><el-option label="汉字字数" value="chinese_length" /><el-option label="数值范围" value="number_range" /><el-option label="限定选项" value="allowed_values" /><el-option label="包含文字" value="contains" /><el-option label="与字段一致" value="same_as" /><el-option label="必须等于" value="exact_text" /><el-option label="禁止填写" value="forbidden_value" /><el-option label="数字带单位" value="number_with_unit" /></el-select>
           <template v-if="rule.kind === 'length' || rule.kind === 'chinese_length'"><el-input-number v-model="rule.min_length" :min="0" :max="10000" placeholder="最小" /><span>至</span><el-input-number v-model="rule.max_length" :min="0" :max="10000" placeholder="最大" /></template>
           <template v-else-if="rule.kind === 'number_range'"><el-input-number v-model="rule.min_value" placeholder="最小" /><span>至</span><el-input-number v-model="rule.max_value" placeholder="最大" /></template>
           <el-input v-else-if="rule.kind === 'allowed_values'" :model-value="(rule.options ?? []).join('、')" placeholder="用顿号分隔选项" @update:model-value="setRuleOptions(rule, $event)" />
           <el-input v-else-if="rule.kind === 'contains'" v-model="rule.text" placeholder="必须包含的文字" />
+          <el-input v-else-if="rule.kind === 'exact_text'" v-model="rule.text" placeholder="必须填写的完整文字" />
+          <template v-else-if="rule.kind === 'forbidden_value'"><el-input v-model="rule.text" placeholder="禁止填写的完整文字" /><el-input v-model="rule.replacement_text" placeholder="建议写法（可留空）" /></template>
+          <el-input v-else-if="rule.kind === 'number_with_unit'" v-model="rule.text" placeholder="单位，如 人；不设则不检查" />
           <el-select v-else-if="rule.kind === 'same_as'" v-model="rule.other_block_id" filterable placeholder="选择另一字段"><el-option v-for="other in comparableBlocks" :key="other.id" :label="`${other.label} · ${other.location}`" :value="other.id" /></el-select>
           <span v-else>检查邮箱地址格式</span>
           <el-button link type="danger" @click="selectedRuleBlock?.rules.splice(index, 1)">删除</el-button>
@@ -70,6 +73,13 @@
           <el-option v-for="doc in documents" :key="doc.id" :label="doc.filename" :value="doc.id" />
         </el-select>
         <el-button type="primary" :disabled="!selectedDocumentId || !publishedTemplate" :loading="reviewing" @click="runReview">执行表单模板审查</el-button>
+      </div>
+      <div class="ai-controls">
+        <el-checkbox v-model="aiEnabled">同时使用 DeepSeek 评估填写内容（可选）</el-checkbox>
+        <el-select v-if="aiEnabled" v-model="aiFieldIds" multiple filterable collapse-tags placeholder="选择要发送的可变字段" :disabled="!publishedTemplate">
+          <el-option v-for="block in aiOptions" :key="block.id" :label="`${block.label || block.location} · ${block.location}`" :value="block.id" />
+        </el-select>
+        <small>仅发送选中字段的填写内容与已发布要求；AI 建议不参与合规判定、不自动修改个人信息。</small>
       </div>
 
       <div class="preview-controls">
@@ -123,6 +133,16 @@
           <p v-if="!issue.repairable" class="manual-note">该问题无法安全地自动修改，需要人工核实后处理。</p>
         </article>
       </div>
+      <section v-if="review?.ai_review" class="ai-results">
+        <h3>DeepSeek 填写内容建议 <small>不影响上方合规结论</small></h3>
+        <el-alert :title="review.ai_review.summary" :type="review.ai_review.status === 'completed' ? 'info' : 'warning'" :closable="false" show-icon />
+        <article v-for="(suggestion, index) in review.ai_review.suggestions" :key="`${review.id}-ai-${index}`" class="issue-card">
+          <div class="issue-head"><el-tag type="info">AI 建议</el-tag><strong>{{ aiFieldLabel(suggestion.block_id) }}</strong><el-button link type="primary" @click="locateAiSuggestion(suggestion)">定位字段</el-button></div>
+          <div class="diff"><span><b>原文</b>{{ suggestion.quote }}</span><span><b>原因</b>{{ suggestion.reason }}</span></div>
+          <p class="manual-note">{{ suggestion.suggestion }}</p>
+          <p v-if="suggestion.recommended_replacement" class="recommend">可核实的替换文字：{{ suggestion.recommended_replacement }}（不会自动应用）</p>
+        </article>
+      </section>
     </template>
   </section>
 </template>
@@ -170,9 +190,12 @@ const saving = ref(false);
 const reviewing = ref(false);
 const reanalyzing = ref(false);
 const activating = ref(false);
+const aiEnabled = ref(false);
+const aiFieldIds = ref<string[]>([]);
 const mutationBusy = computed(() => uploading.value || saving.value || reanalyzing.value || activating.value);
 const historyTemplate = ref<DocumentTemplate | null>(null);
 const publishedTemplate = computed(() => versions.value.find(item=>item.is_published && item.is_review_active) ?? (current.value?.is_published ? current.value : [...versions.value].filter(item=>item.is_published).sort((a,b)=>b.version-a.version)[0] ?? null));
+const aiOptions = computed(() => (publishedTemplate.value?.config.blocks ?? []).filter(block => block.mode === "variable"));
 const comparisonTemplate = computed(() => review.value ? (review.value.template_snapshot ?? historyTemplate.value) : current.value);
 let workspaceEpoch = 0;
 function context(documentId?: number | null) {
@@ -209,15 +232,30 @@ function setCurrent(value: DocumentTemplate | null) {
 function openRequirements(block: TemplateBlock) {
   block.rules ??= [];
   selectedRuleBlock.value = block;
-  requirementText.value = "";
-  unsupportedRequirements.value = [];
+  requirementText.value = block.requirement_text ?? "";
+  unsupportedRequirements.value = block.unsupported_requirements ?? [];
   requirementDialog.value = true;
+}
+
+function onRequirementInput(value: string) {
+  const block = selectedRuleBlock.value;
+  if (!block || value === (block.requirement_text ?? "")) return;
+  block.requirement_text = value;
+  block.rules = [];
+  block.unsupported_requirements = value.trim() ? [value.trim()] : [];
+  unsupportedRequirements.value = block.unsupported_requirements;
+}
+function clearUnsupported() {
+  if (!selectedRuleBlock.value) return;
+  selectedRuleBlock.value.unsupported_requirements = [];
+  unsupportedRequirements.value = [];
 }
 
 function resetRuleParameters(rule: TemplateFieldRule) {
   rule.min_value = null; rule.max_value = null;
   rule.min_length = null; rule.max_length = null;
   rule.options = []; rule.text = ""; rule.other_block_id = "";
+  rule.replacement_text = "";
 }
 
 function setRuleOptions(rule: TemplateFieldRule, value: string) {
@@ -230,9 +268,11 @@ async function parseRequirements() {
   try {
     const response = await templateAuditApi.draftRequirements(requirementText.value.trim());
     unsupportedRequirements.value = response.data.unsupported;
+    selectedRuleBlock.value.requirement_text = requirementText.value.trim();
+    selectedRuleBlock.value.unsupported_requirements = response.data.unsupported;
     if (response.data.required !== null) selectedRuleBlock.value.required = response.data.required;
+    selectedRuleBlock.value.rules = response.data.rules;
     if (response.data.rules.length) {
-      selectedRuleBlock.value.rules = response.data.rules;
       ElMessage.success(`生成 ${response.data.rules.length} 条规则草案，请核对后发布`);
     } else if (response.data.required !== null) ElMessage.success("已将此字段设为必填，请核对后发布");
     else ElMessage.warning("没有可执行的规则，请修改表述或手动新增规则");
@@ -293,7 +333,7 @@ async function saveConfiguration() {
       if ((rule.kind === "length" || rule.kind === "chinese_length") && rule.min_length == null && rule.max_length == null ||
           rule.kind === "number_range" && rule.min_value == null && rule.max_value == null ||
           rule.kind === "allowed_values" && !(rule.options?.length) ||
-          rule.kind === "contains" && !rule.text?.trim() ||
+          (rule.kind === "contains" || rule.kind === "exact_text" || rule.kind === "forbidden_value" || rule.kind === "number_with_unit") && !rule.text?.trim() ||
           rule.kind === "same_as" && !rule.other_block_id) {
         ElMessage.error(`${block.label}有未填写完整的规则`); return;
       }
@@ -349,14 +389,16 @@ async function activateVersion(id: number) {
 }
 async function runReview() {
   if (props.workspaceId == null || props.selectedDocumentId == null || reviewing.value) return;
+  if (aiEnabled.value && !aiFieldIds.value.length) { ElMessage.warning("请先选择需要 DeepSeek 审查的字段，或关闭 AI 建议"); return; }
   const valid=context(props.selectedDocumentId); ++reviewGeneration;
   reviewing.value = true;
   try {
-    const response = await templateAuditApi.run(props.workspaceId, props.selectedDocumentId);
+    const response = await templateAuditApi.run(props.workspaceId, props.selectedDocumentId, aiEnabled.value ? aiFieldIds.value : []);
     if(!valid())return;
     reviews.value = [response.data, ...reviews.value];
     review.value = response.data;
     ElMessage.success(response.data.compliant ? "表单模板审查通过" : `发现 ${response.data.total} 项模板差异`);
+    if (response.data.ai_review && response.data.ai_review.status !== "completed") ElMessage.warning(response.data.ai_review.summary);
   } catch (error) { ElMessage.error(errorText(error)); } finally { reviewing.value = false; }
 }
 function selectReview(id: number) { review.value = reviews.value.find(item => item.id === id) ?? null; }
@@ -400,6 +442,18 @@ function locateIssue(issue: TemplateIssue) {
     focusDocument.value = issue.document_content_index;
   }, 0);
 }
+function locateAiSuggestion(item: { template_content_index: number | null; document_content_index: number | null }) {
+  focusTemplate.value = null; focusDocument.value = null;
+  window.setTimeout(() => {
+    focusTemplate.value = item.template_content_index;
+    focusDocument.value = item.document_content_index;
+  }, 0);
+}
+function aiFieldLabel(blockId: string) {
+  const blocks = comparisonTemplate.value?.config.blocks ?? [];
+  const block = blocks.find(item => item.id === blockId);
+  return block?.label || block?.location || "所选字段";
+}
 function isAccepted(index: number) { return !!review.value && props.acceptedFixes.some(fix => fix.review_id === review.value!.id && fix.issue_index === index); }
 function toggleFormat(index: number, accepted: boolean) {
   if (!review.value) return;
@@ -434,6 +488,7 @@ watch(() => review.value, async (value) => {
 
 watch(() => props.workspaceId, async () => {
   workspaceEpoch++; templateGeneration++; reviewGeneration++; setCurrent(null); versions.value=[];
+  aiEnabled.value = false; aiFieldIds.value = [];
   reviews.value = []; review.value = null;
   try { await loadTemplate(); await loadReviews(); } catch (error) { ElMessage.error(errorText(error)); }
 }, { immediate: true, flush:'sync' });
@@ -441,8 +496,20 @@ watch(() => props.selectedDocumentId, async () => {
   focusDocument.value = null;
   try { await loadReviews(); } catch (error) { ElMessage.error(errorText(error)); }
 });
+watch(() => publishedTemplate.value?.id, () => {
+  const allowed = new Set(aiOptions.value.map(block => block.id));
+  aiFieldIds.value = aiFieldIds.value.filter(id => allowed.has(id));
+});
 </script>
 
 <style scoped>
 .template-audit{display:grid;gap:18px}.toolbar,.review-toolbar,.meta-row,.history-row{display:flex;align-items:center;gap:12px}.toolbar,.review-toolbar{justify-content:space-between}.toolbar h2,.review-toolbar h2{margin:0;color:#243552;font-size:17px}.toolbar p,.review-toolbar p{margin:4px 0 0;color:#8793a7;font-size:12px}.meta-row{flex-wrap:wrap;padding:14px;border:1px solid #e5eaf3;border-radius:9px;background:#fafbfe}.meta-row .el-input{max-width:390px}.version-select{width:260px}.config-table small{display:block;margin-top:4px;color:#98a3b6}.config-table .uncertain,.uncertain{color:#c47b28}.text-link{padding:0;border:0;color:#405a9f;background:none;text-align:left;cursor:pointer}.requirement-help{color:#65738a;font-size:12px;line-height:1.6}.draft-actions{display:flex;align-items:center;gap:10px;margin:10px 0}.draft-actions span{font-size:12px}.requirement-rule{display:flex;align-items:center;gap:8px;margin:8px 0}.requirement-rule .el-input{flex:1;min-width:0}.requirement-rule .el-input-number{width:125px}.review-toolbar{padding-top:8px;border-top:1px solid #edf0f5}.review-toolbar .el-select{width:260px;margin-left:auto}.comparison{display:grid;grid-template-columns:1fr 1fr;gap:14px}.preview-column{min-width:0;border:1px solid #e5eaf3;border-radius:10px;overflow:hidden}.column-title{padding:10px 14px;color:#495a78;background:#f5f7fb;font-size:12px;font-weight:700}.preview-column :deep(.preview),.preview-column :deep(.placeholder){min-height:480px}.preview-column :deep(.doc-wrap){height:min(62vh,620px);min-height:480px;border:0;border-radius:0}.preview-controls{display:flex;align-items:center;justify-content:center;gap:8px;padding:10px 14px;border:1px solid #e5eaf3;border-radius:9px;color:#65738a;background:#f8faff;font-size:12px}.preview-controls .el-select{width:120px}.preview-controls small{margin-left:8px;color:#8b96a9}.history-row{padding:10px 12px;border-radius:8px;background:#f7f9fc;color:#65738a;font-size:12px}.history-row .el-select{width:330px}.issues{display:grid;gap:10px}.issue-card{padding:14px;border:1px solid #e7ebf3;border-radius:10px;background:#fff}.issue-head{display:flex;align-items:center;gap:10px}.issue-head strong{margin-right:auto;color:#31415e;font-size:13px}.diff{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:11px}.diff span{padding:10px;border-radius:7px;color:#56657e;background:#f7f9fc;font-size:12px;overflow-wrap:anywhere}.diff b{display:block;margin-bottom:4px;color:#8995a9;font-size:10px}.recommend{padding:9px 11px;margin:9px 0 0;border-left:3px solid #65bd8c;color:#376c50;background:#f0faf5;font-size:12px}.manual-note{margin:9px 0 0;color:#a17045;font-size:12px}@media(max-width:900px){.comparison{grid-template-columns:1fr}.toolbar,.review-toolbar{align-items:stretch;flex-direction:column}.review-toolbar .el-select{width:100%;margin-left:0}.preview-controls{flex-wrap:wrap}.preview-controls small{width:100%;margin-left:0;text-align:center}.requirement-rule{flex-wrap:wrap}.diff{grid-template-columns:1fr}}
+.ai-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; padding: 12px 14px; border: 1px solid #e5eaf3; border-radius: 9px; background: #fafbfe; }
+.draft-actions { flex-wrap: wrap; }
+.draft-actions .uncertain { min-width: 0; overflow-wrap: anywhere; }
+.ai-controls .el-select { min-width: 260px; max-width: 440px; flex: 1; }
+.ai-controls small { color: #7d8aa0; line-height: 1.5; }
+.ai-results { display: grid; gap: 10px; padding-top: 8px; border-top: 1px solid #e5eaf3; }
+.ai-results h3 { margin: 0; color: #31415e; font-size: 16px; }
+.ai-results h3 small { color: #8793a7; font-size: 12px; font-weight: 400; }
 </style>

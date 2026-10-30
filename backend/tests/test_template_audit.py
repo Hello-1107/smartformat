@@ -120,6 +120,57 @@ def test_requirement_draft_reports_unsupported_instead_of_claiming_success() -> 
     assert draft.unsupported == ["内容真实"]
 
 
+def test_draft_exact_value_forbidden_abbreviation_and_explicit_unit() -> None:
+    draft = draft_field_requirements(
+        "人数要写6人不能写6；政治面貌为共青团员时不能够填写团员；数字后必须带人字"
+    )
+    assert [rule.kind for rule in draft.rules] == ["exact_text", "forbidden_value", "number_with_unit"]
+    assert draft.rules[0].text == "6人"
+    assert draft.rules[1].text == "团员"
+    assert draft.rules[1].replacement_text == "共青团员"
+    assert draft.rules[2].text == "人"
+    assert not draft.unsupported
+
+
+def test_units_are_checked_only_when_field_rule_explicitly_requires_them(tmp_path) -> None:
+    template_path = tmp_path / "sample.docx"
+    target_path = tmp_path / "target.docx"
+    template_path.write_bytes(_mixed_form_bytes(people="6人"))
+    target_path.write_bytes(_mixed_form_bytes(people="6"))
+    config = extract_template_configuration(template_path)
+    people = next(block for block in config.blocks if block.text == "6人")
+    assert not [issue for issue in review_against_template(config, target_path).issues
+                if issue.category == "填写要求" and issue.template_block_id == people.id]
+    people.rules = [TemplateFieldRule(kind="exact_text", text="6人")]
+    issues = [issue for issue in review_against_template(config, target_path).issues
+              if issue.category == "填写要求" and issue.template_block_id == people.id]
+    assert len(issues) == 1
+    assert issues[0].actual == "6"
+    assert issues[0].recommended_replacement == "6人"
+    assert not issues[0].repairable
+    people.rules = [TemplateFieldRule(kind="number_with_unit", text="人")]
+    assert len([issue for issue in review_against_template(config, target_path).issues
+                if issue.category == "填写要求" and issue.template_block_id == people.id]) == 1
+
+
+def test_forbidden_short_form_does_not_reject_full_political_status(tmp_path) -> None:
+    template_path = tmp_path / "politics.docx"
+    target_path = tmp_path / "politics-target.docx"
+    template_path.write_bytes(_person_form_bytes("李四", "22", "共青团员"))
+    target_path.write_bytes(_person_form_bytes("李四", "22", "团员"))
+    config = extract_template_configuration(template_path)
+    block = next(block for block in config.blocks if block.label == "政治面貌" and block.mode == "variable")
+    block.rules = [TemplateFieldRule(kind="forbidden_value", text="团员", replacement_text="共青团员")]
+    issues = [issue for issue in review_against_template(config, target_path).issues
+              if issue.category == "填写要求" and issue.template_block_id == block.id]
+    assert len(issues) == 1
+    assert issues[0].recommended_replacement == "共青团员"
+    assert not issues[0].repairable
+    template_path.write_bytes(_person_form_bytes("李四", "22", "共青团员"))
+    assert not [issue for issue in review_against_template(config, template_path).issues
+                if issue.category == "填写要求" and issue.template_block_id == block.id]
+
+
 def test_review_checks_published_field_requirements(tmp_path) -> None:
     template_path = tmp_path / "template.docx"
     target_path = tmp_path / "target.docx"

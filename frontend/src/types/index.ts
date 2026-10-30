@@ -330,13 +330,14 @@ export type TemplateBlockMode = "fixed" | "variable" | "ignore";
 export type TemplateDataType = "text" | "number" | "date" | "id_number" | "phone" | "email";
 
 export interface TemplateFieldRule {
-  kind: "email" | "length" | "chinese_length" | "number_range" | "allowed_values" | "contains" | "same_as";
+  kind: "email" | "length" | "chinese_length" | "number_range" | "allowed_values" | "contains" | "same_as" | "exact_text" | "forbidden_value" | "number_with_unit";
   min_value?: number | null;
   max_value?: number | null;
   min_length?: number | null;
   max_length?: number | null;
   options?: string[];
   text?: string;
+  replacement_text?: string;
   other_block_id?: string;
 }
 
@@ -372,6 +373,8 @@ export interface TemplateBlock {
   recognition_note?: string;
   recognition_confirmed?: boolean;
   rules: TemplateFieldRule[];
+  requirement_text?: string;
+  unsupported_requirements?: string[];
   format: TemplateParagraphFormat;
 }
 
@@ -422,6 +425,21 @@ export interface TemplateReview {
   total: number;
   repairable: number;
   compliant: boolean;
+  ai_review?: {
+    status: "completed" | "failed" | "not_configured";
+    summary: string;
+    model: string | null;
+    field_ids: string[];
+    suggestions: Array<{
+      block_id: string;
+      template_content_index: number | null;
+      document_content_index: number | null;
+      quote: string;
+      reason: string;
+      suggestion: string;
+      recommended_replacement: string | null;
+    }>;
+  } | null;
 }
 
 export interface TemplateRepairFix {
