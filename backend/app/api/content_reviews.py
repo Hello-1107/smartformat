@@ -3,7 +3,7 @@
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, status, Query
-from openai import APITimeoutError
+from openai import APIConnectionError, APIStatusError, APITimeoutError, AuthenticationError, RateLimitError
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -12,7 +12,7 @@ from app.deps import get_current_user, require_membership
 from app.models import Document, User
 from app.models.content_review import ContentReview
 from app.schemas.content_review import ContentReviewCreate, ContentReviewOut
-from app.services.deepseek_content import review_content, review_content_chunked, validate_chunked
+from app.services.deepseek_content import ContentReviewModelError, needs_safe_chunking, review_content, review_content_chunked, validate_chunked
 from app.services.document_content import read_content, validate_content
 from app.services.pdf_content import paragraphs_from_pdf
 
@@ -56,12 +56,29 @@ def create_review(
     if not settings.deepseek_api_key:
         raise HTTPException(503, "请在后端配置 DEEPSEEK_API_KEY 后使用内容审查")
     try:
-        result = (review_content_chunked if body.chunked else review_content)(paragraphs, body.instructions)
+        if body.chunked:
+            result = review_content_chunked(paragraphs, body.instructions)
+        elif needs_safe_chunking(paragraphs):
+            result = review_content_chunked(paragraphs, body.instructions, cross_review=False)
+        else:
+            result = review_content(paragraphs, body.instructions)
     except APITimeoutError as exc:
         raise HTTPException(504, "DeepSeek 内容审查超时，请稍后重试") from exc
+    except AuthenticationError as exc:
+        raise HTTPException(503, "DeepSeek API Key 无效，请检查后端配置") from exc
+    except RateLimitError as exc:
+        raise HTTPException(429, "DeepSeek 请求受限或额度不足，请稍后重试或检查账户额度") from exc
+    except APIConnectionError as exc:
+        raise HTTPException(503, "无法连接 DeepSeek，请检查网络或代理设置后重试") from exc
+    except APIStatusError as exc:
+        raise HTTPException(502, f"DeepSeek 服务返回错误（HTTP {exc.status_code}），请稍后重试") from exc
+    except ContentReviewModelError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(502, "DeepSeek 返回内容不完整或原文引用无效，请重试；长文可勾选分段审查") from exc
     except Exception as exc:
         # 不将 SDK 错误体、原文或配置泄露给前端。
-        raise HTTPException(502, "DeepSeek 审查失败或返回无效的原文引用，请稍后重试") from exc
+        raise HTTPException(502, "DeepSeek 内容审查失败，请稍后重试") from exc
     # 审查期间文档可能已被其他会话删除；不能重新写入其历史。
     from sqlalchemy import select
     if db.scalar(select(Document.stored_path).where(Document.id == body.document_id, Document.workspace_id == body.workspace_id)) != source_path:

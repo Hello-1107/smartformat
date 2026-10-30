@@ -15,15 +15,23 @@ from app.schemas.template_audit import (
     DocumentTemplateOut,
     TemplateConfiguration,
     TemplateConfigurationUpdate,
+    TemplateRequirementDraftRequest,
+    TemplateRequirementDraftResult,
     TemplateReviewCreate,
     TemplateReviewOut,
     TemplateReviewResult,
 )
 from app.services.document_content import preview_bytes
 from app.services.storage import save_upload, read_upload, require_storage_quota
-from app.services.template_audit import extract_template_configuration, review_against_template
+from app.services.template_audit import draft_field_requirements, extract_template_configuration, review_against_template
 
 router = APIRouter(prefix="/template-audits", tags=["template-audits"])
+
+
+@router.post("/requirements/draft", response_model=TemplateRequirementDraftResult)
+def draft_requirements(body: TemplateRequirementDraftRequest, user: User = Depends(get_current_user)) -> TemplateRequirementDraftResult:
+    # 仅解析用户填写的要求文字；不上传或读取模板中的个人信息。
+    return draft_field_requirements(body.text)
 
 
 def _template_out(item: DocumentTemplate) -> DocumentTemplateOut:
@@ -165,19 +173,36 @@ def update_current_template(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "当前工作区尚未上传模板")
     if body.template_id is not None and body.template_id != item.id:
         raise HTTPException(409, "当前模板已变化，请刷新后再保存")
-    if item.is_published:
-        item = _new_draft(db, item)
     config = TemplateConfiguration.model_validate(item.config_json)
     existing = {block.id: block for block in config.blocks}
     if set(existing) != {block.id for block in body.blocks}:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "模板区域与当前版本不一致，请刷新后重试")
     for update in body.blocks:
         block = existing[update.id]
+        changed_identity = block.label != update.label.strip() or block.mode != update.mode
+        if block.recognition_confidence == "low" and not changed_identity and not update.recognition_confirmed:
+            raise HTTPException(422, f"请先核对低置信度字段：{block.location}")
+        if changed_identity or update.recognition_confirmed:
+            block.recognition_confidence = "high"
+            block.recognition_note = "用户已确认字段名称和区域用途"
+            block.recognition_confirmed = True
         block.label = update.label.strip()
         block.mode = update.mode
         block.required = update.required
         block.data_type = update.data_type
         block.check_format = update.check_format
+        if update.rules is not None:
+            block.rules = update.rules
+    for block in config.blocks:
+        if block.rules and block.mode != "variable":
+            raise HTTPException(422, f"{block.label or block.location}不是可变字段，不能设置填写要求")
+        for rule in block.rules:
+            if rule.kind == "same_as" and (rule.other_block_id == block.id or
+                                          rule.other_block_id not in existing or
+                                          existing[rule.other_block_id].mode != "variable"):
+                raise HTTPException(422, f"{block.label or block.location}的一致性规则引用了无效字段")
+    if item.is_published:
+        item = _new_draft(db, item)
     config.check_page = body.check_page
     item.name = body.name.strip()
     item.config_json = config.model_dump()
@@ -208,6 +233,13 @@ def reanalyze_current_template(
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"重新识别模板失败：{exc}") from exc
     config.check_page = previous.check_page
+    previous_blocks = {block.id: block for block in previous.blocks}
+    for block in config.blocks:
+        old = previous_blocks.get(block.id)
+        if old and old.rules and block.mode == "variable":
+            block.rules = old.rules
+            block.recognition_confidence = "low"
+            block.recognition_note = "沿用上一版本填写要求，请核对字段映射"
     if item.is_published:
         item = _new_draft(db, item)
     item.config_json = config.model_dump()

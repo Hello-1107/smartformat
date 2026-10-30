@@ -100,10 +100,13 @@ export const templateAuditApi = {
       template_id: templateId,
       name,
       check_page: checkPage,
-      blocks: blocks.map(({ id, label, mode, required, data_type, check_format }) => ({
-        id, label, mode, required, data_type, check_format,
+      blocks: blocks.map(({ id, label, mode, required, data_type, check_format, recognition_confirmed, rules }) => ({
+        id, label, mode, required, data_type, check_format, recognition_confirmed: recognition_confirmed ?? false, rules: rules ?? [],
       })),
     });
+  },
+  draftRequirements(text: string) {
+    return http.post<{ rules: import("@/types").TemplateFieldRule[]; unsupported: string[]; required: boolean | null }>("/template-audits/requirements/draft", { text });
   },
   reanalyze(workspaceId: number) {
     return http.post<DocumentTemplate>("/template-audits/current/reanalyze", null, {
@@ -200,7 +203,7 @@ export const contentReviewApi = {
   run(workspaceId: number, documentId: number, instructions: string, chunked = false) {
     return http.post<ContentReview>("/content-reviews", {
       workspace_id: workspaceId, document_id: documentId, instructions, chunked,
-    }, { timeout: chunked ? 600000 : 150000 });
+    }, { timeout: 600000 });
   },
   list(workspaceId: number, documentId: number, beforeId?: number) {
     return http.get<ContentReview[]>("/content-reviews", {

@@ -63,6 +63,7 @@
 <script setup lang="ts">
 import { computed, ref, watch } from "vue";
 import type { CheckItem, Violation } from "@/types";
+import { categoryLabel } from "@/utils/violationLabels";
 
 type IndexedViolation = Violation & { _index: number };
 const props = withDefaults(defineProps<{ check: CheckItem | null; acceptedIndexes: number[]; exporting?: boolean }>(), { exporting: false });
@@ -77,18 +78,6 @@ const filteredViolations = computed<IndexedViolation[]>(() => props.check?.viola
   .filter((violation) => filter.value === "all" || violation.category === filter.value) ?? []);
 watch(() => props.check?.id, () => { filter.value = "all"; });
 
-const CAT: Record<string, string> = {
-  font: "字体",
-  paragraph: "段落",
-  page: "页面",
-  heading_structure: "标题结构",
-  template_structure: "模板结构",
-  template_content: "固定内容",
-  toc: "目录",
-  caption: "图表题注",
-  coverage: "审查范围",
-};
-
 const FIELD: Record<string, string> = {
   missing_region: "缺少章节", extra_region: "多余章节", region_order: "章节顺序", anchor_text: "章节标题",
   missing_toc: "缺少目录", toc_entry_missing: "目录缺项", toc_without_heading: "目录与正文",
@@ -96,7 +85,7 @@ const FIELD: Record<string, string> = {
 };
 
 function catLabel(c: string): string {
-  return CAT[c] ?? c;
+  return categoryLabel(c);
 }
 
 function fieldLabel(field: string): string { return FIELD[field] ?? field; }

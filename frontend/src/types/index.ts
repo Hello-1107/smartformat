@@ -327,7 +327,18 @@ export interface ContentRepairFix {
 }
 
 export type TemplateBlockMode = "fixed" | "variable" | "ignore";
-export type TemplateDataType = "text" | "number" | "date" | "id_number" | "phone";
+export type TemplateDataType = "text" | "number" | "date" | "id_number" | "phone" | "email";
+
+export interface TemplateFieldRule {
+  kind: "email" | "length" | "chinese_length" | "number_range" | "allowed_values" | "contains" | "same_as";
+  min_value?: number | null;
+  max_value?: number | null;
+  min_length?: number | null;
+  max_length?: number | null;
+  options?: string[];
+  text?: string;
+  other_block_id?: string;
+}
 
 export interface TemplateParagraphFormat {
   font: FontInfo;
@@ -357,6 +368,10 @@ export interface TemplateBlock {
   required: boolean;
   data_type: TemplateDataType;
   check_format: boolean;
+  recognition_confidence?: "high" | "medium" | "low";
+  recognition_note?: string;
+  recognition_confirmed?: boolean;
+  rules: TemplateFieldRule[];
   format: TemplateParagraphFormat;
 }
 
@@ -380,7 +395,7 @@ export interface DocumentTemplate {
 }
 
 export interface TemplateIssue {
-  category: "结构" | "固定内容" | "必填" | "字段规范" | "格式" | "页面" | "表格";
+  category: "结构" | "固定内容" | "必填" | "字段规范" | "填写要求" | "格式" | "页面" | "表格";
   severity: "错误" | "警告" | "提示";
   message: string;
   template_block_id: string | null;

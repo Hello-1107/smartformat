@@ -7,6 +7,9 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
+from app.schemas.template_audit import TemplateFieldRule
+from app.services.template_audit import draft_field_requirements, extract_template_configuration, review_against_template
+
 
 def _set_logical_end_alignment(paragraph) -> None:
     """模拟新版 Word 产生、旧版 python-docx 枚举不认识的合法对齐值。"""
@@ -64,6 +67,101 @@ def _person_form_bytes(name: str, age: str, political_status: str) -> bytes:
     stream = io.BytesIO()
     doc.save(stream)
     return stream.getvalue()
+
+
+def _mixed_form_bytes(email: str = "1105240000@qq.com", people: str = "6人") -> bytes:
+    doc = Document()
+    table = doc.add_table(rows=2, cols=6)
+    for row, values in enumerate((
+        ("姓名", "李四", "民族", "汉", "电子邮件", email),
+        ("家庭人口数", people, "生源类别", "统招", "手机号码", "13800138000"),
+    )):
+        for cell, value in zip(table.rows[row].cells, values, strict=True):
+            cell.text = value
+    stream = io.BytesIO()
+    doc.save(stream)
+    return stream.getvalue()
+
+
+def test_field_detection_keeps_labels_separate_from_adjacent_values(tmp_path) -> None:
+    path = tmp_path / "mixed-form.docx"
+    path.write_bytes(_mixed_form_bytes())
+    config = extract_template_configuration(path)
+    blocks = {block.text: block for block in config.blocks if block.text}
+
+    assert blocks["电子邮件"].mode == "fixed"
+    assert blocks["1105240000@qq.com"].label == "电子邮件"
+    assert blocks["1105240000@qq.com"].data_type == "email"
+    assert blocks["汉"].label == "民族"
+    assert blocks["6人"].label == "家庭人口数"
+    assert blocks["6人"].data_type == "number"
+    assert blocks["统招"].label == "生源类别"
+
+
+def test_field_detection_marks_unidentified_sample_value_for_confirmation(tmp_path) -> None:
+    doc = Document()
+    doc.add_table(rows=1, cols=2).cell(0, 0).text = "自定义项"
+    doc.tables[0].cell(0, 1).text = "普通填写内容"
+    path = tmp_path / "uncertain.docx"
+    doc.save(path)
+
+    config = extract_template_configuration(path)
+    value = next(block for block in config.blocks if block.text == "普通填写内容")
+    assert value.mode == "variable"
+    assert value.label == value.location
+    assert value.recognition_confidence == "low"
+    assert value.required is False
+
+
+def test_requirement_draft_reports_unsupported_instead_of_claiming_success() -> None:
+    draft = draft_field_requirements("必须填写；邮箱必须是有效格式；家庭人口数为1-10人；只能填男、女；内容真实")
+    assert draft.required is True
+    assert [rule.kind for rule in draft.rules] == ["email", "number_range", "allowed_values"]
+    assert draft.unsupported == ["内容真实"]
+
+
+def test_review_checks_published_field_requirements(tmp_path) -> None:
+    template_path = tmp_path / "template.docx"
+    target_path = tmp_path / "target.docx"
+    template_path.write_bytes(_mixed_form_bytes())
+    target_path.write_bytes(_mixed_form_bytes(email="wrong-address", people="12人"))
+    config = extract_template_configuration(template_path)
+    for block in config.blocks:
+        if block.text == "1105240000@qq.com":
+            block.rules = [TemplateFieldRule(kind="email")]
+        if block.text == "6人":
+            block.rules = [TemplateFieldRule(kind="number_range", min_value=1, max_value=10)]
+    result = review_against_template(config, target_path)
+    requirement_issues = [issue for issue in result.issues if issue.category == "填写要求"]
+    assert len(requirement_issues) == 2
+    assert {issue.actual for issue in requirement_issues} == {"wrong-address", "12人"}
+    assert all(issue.document_content_index is not None for issue in requirement_issues)
+
+
+def test_review_checks_allowed_values_and_same_as_without_auto_repair(tmp_path) -> None:
+    template = Document()
+    table = template.add_table(rows=1, cols=4)
+    for cell, value in zip(table.rows[0].cells, ("姓名", "张三", "成员姓名", "张三"), strict=True):
+        cell.text = value
+    template_path = tmp_path / "matching.docx"
+    template.save(template_path)
+    config = extract_template_configuration(template_path)
+    name_blocks = [block for block in config.blocks if block.text == "张三"]
+    assert len(name_blocks) == 2
+    name_blocks[0].rules = [TemplateFieldRule(kind="same_as", other_block_id=name_blocks[1].id)]
+    name_blocks[1].rules = [TemplateFieldRule(kind="allowed_values", options=["张三", "王五"])]
+
+    target = Document()
+    table = target.add_table(rows=1, cols=4)
+    for cell, value in zip(table.rows[0].cells, ("姓名", "李四", "成员姓名", "赵六"), strict=True):
+        cell.text = value
+    target_path = tmp_path / "not-matching.docx"
+    target.save(target_path)
+    result = review_against_template(config, target_path)
+    issues = [issue for issue in result.issues if issue.category == "填写要求"]
+    assert len(issues) == 2
+    assert {issue.actual for issue in issues} == {"李四", "赵六"}
+    assert all(not issue.repairable for issue in issues)
 
 
 def _upload_template(client, headers, workspace, content: bytes, name="申请模板"):

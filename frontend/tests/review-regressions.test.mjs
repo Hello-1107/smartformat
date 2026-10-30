@@ -60,6 +60,20 @@ async function mount(file, props={}){
 const flush=async()=>{await new Promise(resolve=>setTimeout(resolve,0));await nextTick();};
 const deferred=()=>{let resolve;const promise=new Promise(r=>resolve=r);return {promise,resolve};};
 
+test('工作区问题分布与报告使用相同中文类别标签', async()=>{
+  const source=await readFile(new URL('../src/utils/violationLabels.ts',import.meta.url),'utf8');
+  const js=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
+  const {categoryLabel}=await import(dataModule(js)+'#labels'+sequence++);
+  assert.equal(categoryLabel('template_content'),'固定内容');
+  assert.equal(categoryLabel('template_structure'),'模板结构');
+  assert.equal(categoryLabel('paragraph'),'段落');
+  const dashboard=await readFile(new URL('../src/components/WorkspaceDashboard.vue',import.meta.url),'utf8');
+  const report=await readFile(new URL('../src/components/ViolationReport.vue',import.meta.url),'utf8');
+  assert.match(dashboard,/import \{ categoryLabel \} from "@\/utils\/violationLabels"/);
+  assert.match(report,/import \{ categoryLabel \} from "@\/utils\/violationLabels"/);
+  assert.match(dashboard,/\.category-name \{[^}]*text-overflow: ellipsis/);
+});
+
 test('预设模板解除 Vue 代理后可创建独立草稿',async()=>{
   const {state}=await mount('views/HomeView.vue');
   const template=reactive({id:'system',name:'规范',ruleset:{name:'规范',body:{font:{size:12}}}});

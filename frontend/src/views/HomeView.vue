@@ -47,7 +47,7 @@
                   <el-button class="batch-button" :disabled="!wordDocuments.length || !selectedRuleId || combinedRunning" @click="batchDialogVisible = true">批量格式审查</el-button>
                   <el-button type="primary" class="run-button" :disabled="!canRunSelectedReviews" :loading="combinedRunning || running" @click="runSelectedReviews">开始文本审查 <span>→</span></el-button>
                 </div>
-                <p v-if="reviewTypes.includes('content')" class="text-template-hint">内容审查会将正文和表格文字发送给 DeepSeek；可在下方“内容审查”中设置重点和长文分段选项。</p>
+                <p v-if="reviewTypes.includes('content')" class="text-template-hint">内容审查会将正文和表格文字发送给 DeepSeek；较长文档会自动拆成多次请求，可在下方“内容审查”中设置重点和额外的跨段复核。</p>
                 <p v-if="selectedDoc?.file_type === 'pdf'" class="text-template-hint">PDF 可进行内容审查并按页定位；Word 格式审查及修订副本仅适用于 .docx。</p>
                 <p v-if="reviewTypes.includes('format') && (ruleDraft || ruleEditor?.isDirty)" class="text-template-hint">模板规则尚未保存，请先在“模板规则”中确认并保存，再执行格式审查。</p>
                 <p v-if="combinedRunning" class="review-progress" role="status">格式审查：{{ formatProgress }} · 内容审查：{{ contentProgress }}</p>

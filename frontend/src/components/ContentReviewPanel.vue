@@ -6,10 +6,10 @@
       <el-button type="primary" :disabled="!document || historyLoading" :loading="running" @click="run">用 DeepSeek 审查内容</el-button></div>
     </header>
     <p class="notice">点击审查将把{{ document?.file_type === 'pdf' ? 'PDF 提取或识别的文字' : '正文和表格文字' }}发送给 DeepSeek，检查措辞、语法、逻辑与一致性。建议需人工确认，不自动修改原文。<span v-if="document?.file_type === 'pdf'">扫描件识别可能有误，点击建议后请核对对应页原件；PDF 建议仅供人工处理，不生成修订副本。</span></p>
-    <el-checkbox v-model="chunked" :disabled="running">长文分段审查（最多 60000 字符，将产生多次模型请求；跨段复核基于节选）</el-checkbox>
+    <el-checkbox v-model="chunked" :disabled="running">长文分段审查（最多 60000 字符，并额外复核跨段节选）</el-checkbox>
     <el-input v-model="instructions" type="textarea" :rows="2" maxlength="1000" show-word-limit :disabled="running" placeholder="可选：补充审查重点，例如：关注前后数据是否矛盾、表达是否适合学术论文。" />
-    <p class="scope">范围：{{ document?.file_type === 'pdf' ? 'PDF 可提取或本地 OCR 识别的文字；图片含义、版式与无法识别的细节不审查。' : '正文与表格；不含页眉页脚、图片、文本框和已删除修订。' }}{{ chunked ? '分段模式最多 60000 字符、3000 个非空段落。' : '单次最多 30000 字符、1500 个非空段落。' }}最多列出 50 条建议。</p>
-    <el-alert v-if="running" :title="chunked ? '正在分段审查并复核节选，可能需要数分钟。' : '正在审查，请稍候，最长约两分钟。'" type="info" :closable="false" show-icon />
+    <p class="scope">范围：{{ document?.file_type === 'pdf' ? 'PDF 可提取或本地 OCR 识别的文字；图片含义、版式与无法识别的细节不审查。' : '正文与表格；不含页眉页脚、图片、文本框和已删除修订。' }}{{ chunked ? '长文模式最多 60000 字符、3000 个非空段落。' : '普通模式最多 30000 字符、1500 个非空段落。' }}超过单次模型请求安全规模时会自动拆成多次请求；最多列出 50 条建议。</p>
+    <el-alert v-if="running" title="正在审查；长文可能自动分段并产生多次模型请求，请稍候。" type="info" :closable="false" show-icon />
     <el-alert v-if="error" :title="error" type="error" :closable="false" show-icon />
     <div v-if="history.length" class="history">
       <span>审查历史</span>

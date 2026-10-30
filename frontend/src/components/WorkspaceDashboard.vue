@@ -29,7 +29,7 @@
         <el-empty v-if="!categoryRows.length" description="审查后显示问题类别" :image-size="58" />
         <div v-else class="category-list">
           <div v-for="item in categoryRows" :key="item.category" class="category-row">
-            <span>{{ categoryLabel(item.category) }}</span><div class="bar"><i :style="{ width: `${item.percent}%` }" /></div><b>{{ item.count }}</b>
+            <span class="category-name" :title="categoryLabel(item.category)">{{ categoryLabel(item.category) }}</span><div class="bar"><i :style="{ width: `${item.percent}%` }" /></div><b>{{ item.count }}</b>
           </div>
         </div>
         <div class="tip"><b>提示：</b>{{ tipText }}</div>
@@ -41,6 +41,7 @@
 <script setup lang="ts">
 import { computed } from "vue";
 import type { CheckItem, DocumentItem, RuleItem } from "@/types";
+import { categoryLabel } from "@/utils/violationLabels";
 
 const props = defineProps<{ documents: DocumentItem[]; rules: RuleItem[]; checks: CheckItem[] }>();
 const emit = defineEmits<{ (e: "select", check: CheckItem): void; (e: "batch"): void }>();
@@ -66,10 +67,13 @@ const categoryRows = computed(() => {
   return Object.entries(totals).sort((a, b) => b[1] - a[1]).map(([category, count]) => ({ category, count, percent: count / highest * 100 }));
 });
 const tipText = computed(() => !props.documents.length ? "请先上传 Word 文档并选择规则。" : !props.rules.length ? "创建或套用一套规则后即可开始审查。" : !reviewedCount.value ? "选择规则后使用批量审查，可快速建立基线。" : violationTotal.value ? "优先处理数量最多的问题类别，可最快提升整体合规率。" : "所有已审查文档均符合其最新应用的规则。" );
-function categoryLabel(category: string) { return ({ font: "字体", paragraph: "段落", page: "页面", heading_structure: "标题结构" } as Record<string, string>)[category] ?? category; }
 function mark(status: string) { return status === "pass" ? "✓" : status === "issue" ? "!" : "·"; }
 </script>
 
 <style scoped>
 .dashboard { min-height: 480px; padding: 4px 1px; }.dashboard-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 20px; padding: 8px 2px 21px; }.eyebrow { margin: 0 0 4px; color: #6b7ea8; font-size: 10px; font-weight: 800; letter-spacing: .12em; }h3 { margin: 0; color: #16213b; font-size: 18px; }.dashboard-head p:not(.eyebrow) { margin: 7px 0 0; color: #8290a8; font-size: 13px; }.metrics { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }.metrics > div,.panel { border: 1px solid #e7ecf5; border-radius: 11px; background: #fbfcff; }.metrics > div { display: grid; gap: 4px; padding: 15px; }.metrics span,.metrics small,.panel-head > span { color: #8b98ad; font-size: 11px; }.metrics b { color: #30415f; font-size: 24px; }.pass { color: #149269 !important; }.issue { color: #db6645 !important; }.content-grid { display: grid; grid-template-columns: 1.15fr .85fr; gap: 13px; margin-top: 14px; }.panel { min-height: 235px; padding: 15px; }.panel-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }.panel-head h4 { margin: 0; color: #33435f; font-size: 14px; }.status-list { display: grid; max-height: 260px; margin: 0; padding: 0; overflow-y: auto; list-style: none; }.status-list li { display: flex; align-items: center; min-width: 0; gap: 8px; padding: 10px 3px; border-bottom: 1px solid #edf1f6; }.status-mark { display: grid; place-items: center; width: 21px; height: 21px; flex: 0 0 auto; border-radius: 50%; color: #708098; background: #eef1f6; font-size: 12px; font-weight: 800; }.status-mark.pass { background: #e1f6ee; }.status-mark.issue { background: #fff0eb; }.item-name { overflow: hidden; color: #4b5b74; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }.item-detail { margin-left: auto; color: #98a4b6; font-size: 11px; white-space: nowrap; }.category-list { display: grid; gap: 14px; padding: 12px 2px; }.category-row { display: grid; grid-template-columns: 62px 1fr 28px; align-items: center; gap: 8px; color: #64738b; font-size: 12px; }.bar { height: 7px; overflow: hidden; border-radius: 10px; background: #edf1f8; }.bar i { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg,#7890f4,#526ddb); }.category-row b { color: #40506a; text-align: right; }.tip { margin-top: 25px; padding: 10px; border-radius: 8px; color: #728098; background: #f3f6fc; font-size: 12px; line-height: 1.6; }.tip b { color: #536bca; }@media (max-width: 760px) { .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }.content-grid { grid-template-columns: 1fr; }.dashboard-head { display: block; }.dashboard-head > .el-button { margin-top: 13px; } }
+.content-grid { grid-template-columns: minmax(0, 1.15fr) minmax(0, .85fr); }
+.panel { min-width: 0; }
+.category-row { grid-template-columns: 62px minmax(0, 1fr) 28px; }
+.category-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 </style>

@@ -20,6 +20,47 @@ class TemplateParagraphFormat(BaseModel):
     first_line_indent_chars: float | None = None
 
 
+class TemplateFieldRule(BaseModel):
+    kind: Literal["email", "length", "chinese_length", "number_range", "allowed_values", "contains", "same_as"]
+    min_value: float | None = Field(default=None, allow_inf_nan=False)
+    max_value: float | None = Field(default=None, allow_inf_nan=False)
+    min_length: int | None = Field(default=None, ge=0, le=10000)
+    max_length: int | None = Field(default=None, ge=0, le=10000)
+    options: list[str] = Field(default_factory=list, max_length=30)
+    text: str = Field(default="", max_length=200)
+    other_block_id: str = Field(default="", max_length=100)
+
+    @model_validator(mode="after")
+    def valid_parameters(self):
+        if self.kind in {"length", "chinese_length"} and (self.min_length is None and self.max_length is None or
+                                      self.min_length is not None and self.max_length is not None and self.min_length > self.max_length):
+            raise ValueError("长度规则需要有效的最小或最大长度")
+        if self.kind == "number_range" and (self.min_value is None and self.max_value is None or
+                                            self.min_value is not None and self.max_value is not None and self.min_value > self.max_value):
+            raise ValueError("数值范围规则需要有效的最小或最大值")
+        if self.kind == "allowed_values" and (not self.options or any(not value.strip() for value in self.options)):
+            raise ValueError("可选值规则不能为空")
+        if self.kind == "allowed_values":
+            self.options = [value.strip() for value in self.options]
+            if any(len(value) > 100 for value in self.options):
+                raise ValueError("单个可选值不能超过 100 字")
+        if self.kind == "contains" and not self.text.strip():
+            raise ValueError("包含文字规则不能为空")
+        if self.kind == "same_as" and not self.other_block_id:
+            raise ValueError("一致性规则必须指定另一字段")
+        return self
+
+
+class TemplateRequirementDraftRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=1000)
+
+
+class TemplateRequirementDraftResult(BaseModel):
+    rules: list[TemplateFieldRule] = Field(default_factory=list)
+    unsupported: list[str] = Field(default_factory=list)
+    required: bool | None = None
+
+
 class TemplateBlock(BaseModel):
     id: str
     order: int = Field(ge=0)
@@ -35,8 +76,12 @@ class TemplateBlock(BaseModel):
     label: str = Field(default="", max_length=100)
     mode: Literal["fixed", "variable", "ignore"] = "variable"
     required: bool = True
-    data_type: Literal["text", "number", "date", "id_number", "phone"] = "text"
+    data_type: Literal["text", "number", "date", "id_number", "phone", "email"] = "text"
     check_format: bool = True
+    recognition_confidence: Literal["high", "medium", "low"] = "medium"
+    recognition_note: str = ""
+    recognition_confirmed: bool = False
+    rules: list[TemplateFieldRule] = Field(default_factory=list, max_length=20)
     format: TemplateParagraphFormat = Field(default_factory=TemplateParagraphFormat)
 
 
@@ -66,8 +111,10 @@ class TemplateBlockUpdate(BaseModel):
     label: str = Field(default="", max_length=100)
     mode: Literal["fixed", "variable", "ignore"]
     required: bool
-    data_type: Literal["text", "number", "date", "id_number", "phone"]
+    data_type: Literal["text", "number", "date", "id_number", "phone", "email"]
     check_format: bool
+    recognition_confirmed: bool = False
+    rules: list[TemplateFieldRule] | None = Field(default=None, max_length=20)
 
 
 class TemplateConfigurationUpdate(BaseModel):
@@ -91,7 +138,7 @@ class TemplateReviewCreate(BaseModel):
 
 
 class TemplateIssue(BaseModel):
-    category: Literal["结构", "固定内容", "必填", "字段规范", "格式", "页面", "表格"]
+    category: Literal["结构", "固定内容", "必填", "字段规范", "填写要求", "格式", "页面", "表格"]
     severity: Literal["错误", "警告", "提示"] = "错误"
     message: str
     template_block_id: str | None = None
