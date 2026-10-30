@@ -149,6 +149,45 @@ test('工作区切换后迟到的列表不能覆盖当前页面',async()=>{
   assert.deepEqual(state.documents,[]);
 });
 
+test('删除当前工作区后清空页面状态和选择',async()=>{
+  const m=globalThis.__reviewMocks;
+  m.auth.user.id=7;
+  m.workspace.currentId=1;
+  m.workspace.workspaces=[{id:1,name:'待删除',owner_id:7,role:'owner'}];
+  const removed=[];
+  m.workspace.remove=async id=>{removed.push(id);m.workspace.workspaces=[];m.workspace.currentId=null;};
+  const {state}=await mount('views/HomeView.vue');
+  await flush();
+  state.documents=[{id:3,filename:'旧文件.docx'}];
+  await state.onDeleteWorkspace();
+  assert.deepEqual(removed,[1]);
+  assert.equal(m.workspace.currentId,null);
+  assert.deepEqual(state.documents,[]);
+  assert.equal(state.selectedDocId,null);
+});
+
+test('删除表单模板版本后刷新版本和历史并清除待应用修订',async()=>{
+  const m=globalThis.__reviewMocks;
+  const template={id:3,workspace_id:1,version:2,name:'旧模板',filename:'template.docx',is_active:true,is_published:true,
+    is_review_active:true,config:{check_page:true,blocks:[]}};
+  let exists=true;
+  m.templateAuditApi.current=async()=>({data:exists?template:null});
+  m.templateAuditApi.versions=async()=>({data:exists?[template]:[]});
+  m.templateAuditApi.reviews=async()=>({data:exists?[{id:9,template_id:3,document_id:5,template_version:2,template_snapshot:template}]:[]});
+  m.templateAuditApi.removeVersion=async(_workspaceId,id)=>{assert.equal(id,3);exists=false;};
+  const {state,events}=await mount('components/TemplateAuditPanel.vue',{
+    workspaceId:1,documents:[],selectedDocumentId:5,acceptedFixes:[],
+  });
+  await flush();
+  assert.equal(state.current.id,3);
+  await state.deleteCurrentVersion();
+  assert.equal(state.current,null);
+  assert.deepEqual(state.versions,[]);
+  assert.deepEqual(state.reviews,[]);
+  assert.ok(events.some(([name])=>name==='clear-fixes'));
+  assert.ok(events.some(([name,id])=>name==='clear-review'&&id===9));
+});
+
 test('迟到的内容历史不能覆盖刚完成的新审查',async()=>{
   const m=globalThis.__reviewMocks;const old=deferred();m.contentReviewApi.list=()=>old.promise;
   m.contentReviewApi.run=async()=>({data:{id:2,document_id:1,summary:'NEW',issues:[]}});

@@ -23,6 +23,7 @@
         <el-select :model-value="current.id" class="version-select" @change="activateVersion">
           <el-option v-for="item in versions" :key="item.id" :value="item.id" :label="`版本 ${item.version} · ${item.filename}${item.is_active ? '（当前）' : ''}`" />
         </el-select>
+        <el-button type="danger" plain :disabled="mutationBusy || reviewing" :loading="deletingVersion" @click="deleteCurrentVersion">删除当前版本</el-button>
         <el-switch v-model="draftCheckPage" active-text="检查页面设置" />
         <el-button :loading="reanalyzing" @click="reanalyzeFields">重新识别字段</el-button>
         <el-button type="success" :loading="saving" @click="saveConfiguration">保存并发布配置</el-button>
@@ -169,6 +170,7 @@ const emit = defineEmits<{
   (e: "accept", fix: TemplateRepairFix): void;
   (e: "reject", reviewId: number, issueIndex: number): void;
   (e: "clear-review", reviewId: number): void;
+  (e: "clear-fixes"): void;
 }>();
 
 const current = ref<DocumentTemplate | null>(null);
@@ -190,9 +192,10 @@ const saving = ref(false);
 const reviewing = ref(false);
 const reanalyzing = ref(false);
 const activating = ref(false);
+const deletingVersion = ref(false);
 const aiEnabled = ref(false);
 const aiFieldIds = ref<string[]>([]);
-const mutationBusy = computed(() => uploading.value || saving.value || reanalyzing.value || activating.value);
+const mutationBusy = computed(() => uploading.value || saving.value || reanalyzing.value || activating.value || deletingVersion.value);
 const historyTemplate = ref<DocumentTemplate | null>(null);
 const publishedTemplate = computed(() => versions.value.find(item=>item.is_published && item.is_review_active) ?? (current.value?.is_published ? current.value : [...versions.value].filter(item=>item.is_published).sort((a,b)=>b.version-a.version)[0] ?? null));
 const aiOptions = computed(() => (publishedTemplate.value?.config.blocks ?? []).filter(block => block.mode === "variable"));
@@ -386,6 +389,27 @@ async function activateVersion(id: number) {
     versions.value=listed.data;
     ElMessage.success(`已切换到模板版本 ${response.data.version}`);
   } catch (error) { if (error !== "cancel" && error !== "close" && valid()) ElMessage.error(errorText(error)); } finally {activating.value=false;}
+}
+async function deleteCurrentVersion() {
+  const selected = current.value;
+  const workspaceId = props.workspaceId;
+  if (!selected || workspaceId == null || mutationBusy.value || reviewing.value) return;
+  const valid = context();
+  try {
+    await ElMessageBox.confirm(`删除表单模板版本 v${selected.version}「${selected.name}」？使用此版本的审查记录也会删除；若还有其他版本，将自动切换到可用版本。此操作无法恢复。`, '删除模板版本', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' });
+  } catch { return; }
+  if (!valid() || current.value?.id !== selected.id) return;
+  deletingVersion.value = true;
+  ++templateGeneration;
+  try {
+    await templateAuditApi.removeVersion(workspaceId, selected.id);
+    if (!valid()) return;
+    emit('clear-fixes');
+    for (const item of reviews.value.filter(item => item.template_id === selected.id)) emit('clear-review', item.id);
+    await Promise.all([loadTemplate(), loadReviews()]);
+    if (valid()) ElMessage.success(`表单模板版本 v${selected.version} 已删除`);
+  } catch (error) { if (valid()) ElMessage.error(errorText(error)); }
+  finally { deletingVersion.value = false; }
 }
 async function runReview() {
   if (props.workspaceId == null || props.selectedDocumentId == null || reviewing.value) return;

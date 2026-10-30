@@ -28,3 +28,16 @@ def test_adds_is_published_to_legacy_document_templates() -> None:
         )).one()
     assert row.name == "旧模板"
     assert row.is_published == 0
+
+
+def test_template_version_counter_starts_after_existing_versions() -> None:
+    engine = create_engine("sqlite:///:memory:")
+    with engine.begin() as connection:
+        connection.execute(text("CREATE TABLE workspaces (id INTEGER PRIMARY KEY)"))
+        connection.execute(text("CREATE TABLE document_templates (id INTEGER PRIMARY KEY, workspace_id INTEGER, version INTEGER, is_published BOOLEAN, is_review_active BOOLEAN)"))
+        connection.execute(text("INSERT INTO workspaces (id) VALUES (1), (2)"))
+        connection.execute(text("INSERT INTO document_templates (id, workspace_id, version) VALUES (1, 1, 4), (2, 1, 7)"))
+    apply_compatibility_migrations(engine)
+    apply_compatibility_migrations(engine)
+    with engine.connect() as connection:
+        assert connection.execute(text("SELECT id, next_template_version FROM workspaces ORDER BY id")).all() == [(1, 8), (2, 1)]

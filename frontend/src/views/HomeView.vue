@@ -2,7 +2,7 @@
   <el-container class="app-shell">
     <el-header class="topbar">
       <div class="brand"><span class="brand-mark">S</span><span>审格式 <small>SmartFormat</small></span></div>
-      <div class="workspace-picker"><span class="workspace-label">当前工作区</span><el-select :model-value="ws.currentId" placeholder="选择工作区" @update:model-value="onSwitchWorkspace"><el-option v-for="w in ws.workspaces" :key="w.id" :label="w.name" :value="w.id" /></el-select><el-button text class="new-workspace" @click="onNewWorkspace">＋ 新建</el-button></div>
+      <div class="workspace-picker"><span class="workspace-label">当前工作区</span><el-select :model-value="ws.currentId" placeholder="选择工作区" @update:model-value="onSwitchWorkspace"><el-option v-for="w in ws.workspaces" :key="w.id" :label="w.name" :value="w.id" /></el-select><el-button text class="new-workspace" @click="onNewWorkspace">＋ 新建</el-button><el-button v-if="canDeleteWorkspace" text type="danger" class="new-workspace" :loading="deletingWorkspace" @click="onDeleteWorkspace">删除工作区</el-button></div>
       <div class="topbar-spacer" />
       <div class="user-area"><span class="avatar">{{ userInitial }}</span><el-dropdown><span class="user-name">{{ auth.user?.username }} <span class="chevron">⌄</span></span><template #dropdown><el-dropdown-menu><el-dropdown-item @click="logout">退出登录</el-dropdown-item></el-dropdown-menu></template></el-dropdown></div>
     </el-header>
@@ -60,7 +60,7 @@
                 </el-tabs>
               </section>
             </el-tab-pane>
-            <el-tab-pane label="表单模板审查" name="template"><TemplateAuditPanel :active="tab === 'template'" :workspace-id="ws.currentId" :documents="wordDocuments" :selected-document-id="selectedDoc?.file_type === 'pdf' ? null : selectedDocId" :accepted-fixes="selectedTemplateFixes" @select-document="onSelectDocument" @accept="onAcceptTemplateFix" @reject="onRejectTemplateFix" @clear-review="onClearTemplateReview" /></el-tab-pane>
+            <el-tab-pane label="表单模板审查" name="template"><TemplateAuditPanel :active="tab === 'template'" :workspace-id="ws.currentId" :documents="wordDocuments" :selected-document-id="selectedDoc?.file_type === 'pdf' ? null : selectedDocId" :accepted-fixes="selectedTemplateFixes" @select-document="onSelectDocument" @accept="onAcceptTemplateFix" @reject="onRejectTemplateFix" @clear-review="onClearTemplateReview" @clear-fixes="acceptedTemplate = {}" /></el-tab-pane>
             <el-tab-pane label="文档深度审查" name="analysis"><AnalysisPanel :workspace-id="ws.currentId" :documents="documents" :rules="rules" :selected-document-id="selectedDocId" @locate="onAnalysisLocate" /></el-tab-pane>
           </el-tabs>
         </el-card>
@@ -145,6 +145,8 @@ const canRunSelectedReviews = computed(() => {
 });
 const rulesetPretty = computed(() => selectedRule.value ? JSON.stringify(selectedRule.value.ruleset, null, 2) : "（尚未选择规则）");
 const userInitial = computed(() => auth.user?.username?.trim().slice(0, 1).toUpperCase() || "U");
+const canDeleteWorkspace = computed(() => ws.workspaces.some(item => item.id === ws.currentId && item.owner_id === auth.user?.id && item.role === 'owner'));
+const deletingWorkspace = ref(false);
 async function loadDocuments() { if (ws.currentId == null) return; const valid = context(); const resp = await documentApi.list(ws.currentId); if (!valid()) return; documents.value = resp.data; if (!documents.value.some((d) => d.id === selectedDocId.value)) selectedDocId.value = documents.value[0]?.id ?? null; }
 async function loadRules() { if (ws.currentId == null) return; const valid = context(); const resp = await ruleApi.list(ws.currentId); if (!valid()) return; rules.value = resp.data; if (!rules.value.some((r) => r.id === selectedRuleId.value)) selectedRuleId.value = rules.value[0]?.id ?? null; }
 async function loadChecks() { if (ws.currentId == null) return; const valid = context(); const request=++checkReadEpoch; const resp = await checkApi.list(ws.currentId); if (!valid() || request!==checkReadEpoch) return; checks.value = resp.data; await loadDocumentHistory(); if(valid() && request===checkReadEpoch && check.value && !checks.value.some((item) => item.id === check.value?.id)) check.value = null; }
@@ -153,8 +155,26 @@ watch(selectedDocId,()=>{void loadDocumentHistory().catch(error=>ElMessage.error
 async function loadTemplates() { if (ws.currentId == null) { templates.value = []; return; } const valid = context(); const response = await ruleApi.templates(ws.currentId); if(valid()) templates.value = response.data; }
 function syncCurrentCheck() { check.value = activeChecks.value[0] ?? null; }
 async function loadAll() { await ws.load(); await Promise.all([loadDocuments(), loadRules(), loadChecks(), loadTemplates()]); syncCurrentCheck(); }
-async function onSwitchWorkspace(id: number) { if (!(await mayDiscard())) return; ws.currentId = id; documents.value=[]; rules.value=[]; checks.value=[]; templates.value=[]; selectedDocId.value = null; selectedRuleId.value = null; ruleDraft.value = null; check.value = null; focusParagraph.value = null; acceptedFormat.value = {}; acceptedContent.value = {}; acceptedTemplate.value = {}; const valid=context(); try { await Promise.all([loadDocuments(), loadRules(), loadChecks(), loadTemplates()]); if(valid()) syncCurrentCheck(); } catch (e) { if(valid()) ElMessage.error(errText(e)); } }
-async function onNewWorkspace() { if(!(await mayDiscard()))return; const valid=context(); try { const { value } = await ElMessageBox.prompt("请输入工作区名称", "新建工作区", { confirmButtonText: "创建", cancelButtonText: "取消", inputPattern: /\S+/, inputErrorMessage: "工作区名称不能为空" }); if(!valid())return; await ws.create(value.trim()); documents.value = []; rules.value = []; checks.value = []; templates.value = []; selectedDocId.value=null; selectedRuleId.value=null; ruleDraft.value = null; check.value = null; acceptedFormat.value = {}; acceptedContent.value = {}; acceptedTemplate.value = {}; await Promise.all([loadDocuments(), loadRules(), loadChecks(), loadTemplates()]); syncCurrentCheck(); } catch(e) { if(e!=='cancel' && e!=='close') ElMessage.error(errText(e)); } }
+function clearWorkspaceState() { documents.value=[]; rules.value=[]; checks.value=[]; templates.value=[]; selectedDocId.value = null; selectedRuleId.value = null; ruleDraft.value = null; check.value = null; focusParagraph.value = null; focusPage.value = null; acceptedFormat.value = {}; acceptedContent.value = {}; acceptedTemplate.value = {}; }
+async function onSwitchWorkspace(id: number) { if (!(await mayDiscard())) return; ws.currentId = id; clearWorkspaceState(); const valid=context(); try { await Promise.all([loadDocuments(), loadRules(), loadChecks(), loadTemplates()]); if(valid()) syncCurrentCheck(); } catch (e) { if(valid()) ElMessage.error(errText(e)); } }
+async function onDeleteWorkspace() {
+  const workspace = ws.workspaces.find(item => item.id === ws.currentId);
+  if (!workspace || !canDeleteWorkspace.value || deletingWorkspace.value || !(await mayDiscard())) return;
+  const valid = context();
+  try { await ElMessageBox.confirm(`删除工作区「${workspace.name}」？其中的文档、规则、表单模板及所有审查历史会一并删除，且无法恢复。`, '删除工作区', { type: 'warning', confirmButtonText: '确认删除', cancelButtonText: '取消' }); }
+  catch { return; }
+  if (!valid()) return;
+  deletingWorkspace.value = true;
+  try {
+    await ws.remove(workspace.id);
+    clearWorkspaceState();
+    const nextValid = context();
+    if (ws.currentId != null) await Promise.all([loadDocuments(), loadRules(), loadChecks(), loadTemplates()]);
+    if (nextValid()) { syncCurrentCheck(); ElMessage.success('工作区已删除'); }
+  } catch (e) { ElMessage.error(errText(e)); }
+  finally { deletingWorkspace.value = false; }
+}
+async function onNewWorkspace() { if(!(await mayDiscard()))return; const valid=context(); try { const { value } = await ElMessageBox.prompt("请输入工作区名称", "新建工作区", { confirmButtonText: "创建", cancelButtonText: "取消", inputPattern: /\S+/, inputErrorMessage: "工作区名称不能为空" }); if(!valid())return; await ws.create(value.trim()); clearWorkspaceState(); await Promise.all([loadDocuments(), loadRules(), loadChecks(), loadTemplates()]); syncCurrentCheck(); } catch(e) { if(e!=='cancel' && e!=='close') ElMessage.error(errText(e)); } }
 function onSelectDocument(id: number | null) { selectedDocId.value = id; focusParagraph.value = null; focusPage.value=null; if(documents.value.find(doc=>doc.id===id)?.file_type==='pdf')reviewTypes.value=['content']; syncCurrentCheck(); }
 async function onUpload(file: File) { if (ws.currentId == null) return; const valid=context(); uploading.value = true; try { const resp = await documentApi.upload(ws.currentId, file); if(!valid()) return; await loadDocuments(); if(!valid())return; onSelectDocument(resp.data.id); tab.value = "preview"; ElMessage.success("文档已上传并完成解析"); } catch (e) { if(valid()) ElMessage.error(errText(e)); } finally { uploading.value = false; } }
 async function onDeleteDoc(doc: DocumentItem) { const valid=context(); try { await ElMessageBox.confirm(`删除文档「${doc.filename}」及其全部格式、内容和表单审查历史？此操作无法恢复。`, "删除文档", { type: "warning", confirmButtonText: "删除", cancelButtonText: "取消" }); } catch { return; } if(!valid())return; try { await documentApi.remove(doc.id); if(!valid())return; for(const item of checks.value.filter(c=>c.document_id===doc.id)) delete acceptedFormat.value[item.id]; acceptedContent.value=Object.fromEntries(Object.entries(acceptedContent.value).filter(([,item])=>item.documentId!==doc.id)); acceptedTemplate.value=Object.fromEntries(Object.entries(acceptedTemplate.value).filter(([,item])=>item.documentId!==doc.id)); await Promise.all([loadDocuments(),loadChecks()]); if(!valid())return; syncCurrentCheck(); ElMessage.success("文档及全部审查历史已删除"); } catch (e) { if(valid())ElMessage.error(errText(e)); } }

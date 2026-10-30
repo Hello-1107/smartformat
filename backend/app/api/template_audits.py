@@ -11,7 +11,7 @@ from starlette.concurrency import run_in_threadpool
 from app.database import get_db
 from app.config import settings
 from app.deps import get_current_user, require_membership
-from app.models import Document, User
+from app.models import Document, User, Workspace
 from app.models.template_audit import DocumentTemplate, TemplateReview
 from app.schemas.template_audit import (
     DocumentTemplateOut,
@@ -27,6 +27,7 @@ from app.schemas.template_audit import (
 from app.services.deepseek_template_content import review_template_fields
 from app.services.document_content import preview_bytes
 from app.services.storage import save_upload, read_upload, require_storage_quota
+from app.services.deletion import discard_uploads, restore_uploads, stage_uploads
 from app.services.template_audit import draft_field_requirements, extract_template_configuration, review_against_template
 
 router = APIRouter(prefix="/template-audits", tags=["template-audits"])
@@ -76,6 +77,13 @@ def _active(db: Session, workspace_id: int) -> DocumentTemplate | None:
         .order_by(DocumentTemplate.version.desc())
         .first()
     )
+
+
+def _next_version(db: Session, workspace_id: int) -> int:
+    workspace = db.query(Workspace).filter(Workspace.id == workspace_id).with_for_update().one()
+    version = workspace.next_template_version
+    workspace.next_template_version = version + 1
+    return version
 
 
 @router.get("/current", response_model=DocumentTemplateOut | None)
@@ -133,19 +141,13 @@ async def upload_template(
     except Exception as exc:  # noqa: BLE001
         Path(stored_path).unlink(missing_ok=True)
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"模板解析失败：{exc}") from exc
-    latest = (
-        db.query(DocumentTemplate)
-        .filter(DocumentTemplate.workspace_id == workspace_id)
-        .order_by(DocumentTemplate.version.desc())
-        .first()
-    )
     db.query(DocumentTemplate).filter(
         DocumentTemplate.workspace_id == workspace_id,
         DocumentTemplate.is_active.is_(True),
     ).update({DocumentTemplate.is_active: False}, synchronize_session="fetch")
     item = DocumentTemplate(
         workspace_id=workspace_id,
-        version=(latest.version + 1) if latest else 1,
+        version=_next_version(db, workspace_id),
         name=name.strip(),
         filename=filename,
         stored_path=stored_path,
@@ -260,9 +262,8 @@ def reanalyze_current_template(
 
 
 def _new_draft(db: Session, source: DocumentTemplate) -> DocumentTemplate:
-    latest = db.query(DocumentTemplate).filter(DocumentTemplate.workspace_id == source.workspace_id).order_by(DocumentTemplate.version.desc()).first()
     source.is_active = False
-    item = DocumentTemplate(workspace_id=source.workspace_id, version=latest.version + 1,
+    item = DocumentTemplate(workspace_id=source.workspace_id, version=_next_version(db, source.workspace_id),
         name=source.name, filename=source.filename, stored_path=source.stored_path, size=source.size,
         is_active=True, is_published=False, config_json=source.config_json, created_by=source.created_by)
     db.add(item)
@@ -302,6 +303,48 @@ def activate_template_version(
     db.commit()
     db.refresh(item)
     return _template_out(item)
+
+
+@router.delete("/versions/{template_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_template_version(
+    template_id: int,
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    require_membership(db, user, workspace_id)
+    item = db.get(DocumentTemplate, template_id)
+    if item is None or item.workspace_id != workspace_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "模板版本不存在")
+
+    path = item.stored_path
+    referenced_elsewhere = (
+        db.query(DocumentTemplate.id).filter(DocumentTemplate.id != item.id, DocumentTemplate.stored_path == path).first()
+        or db.query(Document.id).filter(Document.stored_path == path).first()
+    )
+    staged = stage_uploads({path} if not referenced_elsewhere else set())
+    was_active, was_review_active = item.is_active, item.is_review_active
+    try:
+        # 历史审查报告引用版本号与配置快照；随该版本一并删除，避免悬空记录。
+        db.query(TemplateReview).filter(TemplateReview.template_id == item.id).delete(synchronize_session=False)
+        db.delete(item)
+        db.flush()
+        if was_active:
+            replacement = db.query(DocumentTemplate).filter(DocumentTemplate.workspace_id == workspace_id).order_by(DocumentTemplate.version.desc()).first()
+            if replacement is not None:
+                replacement.is_active = True
+        if was_review_active:
+            replacement = (db.query(DocumentTemplate)
+                           .filter(DocumentTemplate.workspace_id == workspace_id, DocumentTemplate.is_published.is_(True))
+                           .order_by(DocumentTemplate.version.desc()).first())
+            if replacement is not None:
+                replacement.is_review_active = True
+        db.commit()
+    except Exception:
+        db.rollback()
+        restore_uploads(staged)
+        raise
+    discard_uploads(staged)
 
 
 @router.get("/templates/{template_id}/preview")

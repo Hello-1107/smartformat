@@ -5,7 +5,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.deps import get_current_user, require_membership
-from app.models import User, Workspace, WorkspaceMember
+from app.models import Document, User, Workspace, WorkspaceMember
+from app.models.template_audit import DocumentTemplate
+from app.services.deletion import discard_uploads, restore_uploads, stage_uploads
 from app.schemas.workspace import WorkspaceCreate, WorkspaceOut
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
@@ -63,3 +65,31 @@ def get_workspace(
     if workspace is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "工作区不存在")
     return _to_out(workspace, member.role)
+
+
+@router.delete("/{workspace_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_workspace(
+    workspace_id: int,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+) -> None:
+    member = require_membership(db, user, workspace_id)
+    workspace = db.get(Workspace, workspace_id)
+    if workspace is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "工作区不存在")
+    if member.role != "owner" or workspace.owner_id != user.id:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "仅工作区所有者可以删除工作区")
+
+    paths = {row[0] for model in (Document, DocumentTemplate)
+             for row in db.query(model.stored_path).filter(model.workspace_id == workspace_id).all()}
+    shared = {row[0] for model in (Document, DocumentTemplate)
+              for row in db.query(model.stored_path).filter(model.workspace_id != workspace_id, model.stored_path.in_(paths)).all()}
+    staged = stage_uploads(paths - shared)
+    try:
+        db.delete(workspace)
+        db.commit()
+    except Exception:
+        db.rollback()
+        restore_uploads(staged)
+        raise
+    discard_uploads(staged)

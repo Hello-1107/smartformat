@@ -13,8 +13,8 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     const resp = await workspaceApi.list();
     workspaces.value = resp.data;
     loaded.value = true;
-    if (currentId.value == null && workspaces.value.length > 0) {
-      currentId.value = workspaces.value[0].id;
+    if (!workspaces.value.some(item => item.id === currentId.value)) {
+      currentId.value = workspaces.value[0]?.id ?? null;
     }
   }
 
@@ -25,11 +25,17 @@ export const useWorkspaceStore = defineStore("workspace", () => {
     return resp.data;
   }
 
+  async function remove(id: number) {
+    await workspaceApi.remove(id);
+    workspaces.value = workspaces.value.filter(item => item.id !== id);
+    if (currentId.value === id) currentId.value = workspaces.value[0]?.id ?? null;
+  }
+
   function reset() {
     workspaces.value = [];
     currentId.value = null;
     loaded.value = false;
   }
 
-  return { workspaces, currentId, loaded, load, create, reset };
+  return { workspaces, currentId, loaded, load, create, remove, reset };
 });

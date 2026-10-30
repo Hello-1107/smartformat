@@ -53,6 +53,9 @@ export const workspaceApi = {
   create(name: string) {
     return http.post<Workspace>("/workspaces", { name });
   },
+  remove(id: number) {
+    return http.delete(`/workspaces/${id}`);
+  },
 };
 
 // ---- 文档 ----
@@ -118,6 +121,9 @@ export const templateAuditApi = {
     return http.post<DocumentTemplate>(`/template-audits/versions/${templateId}/activate`, null, {
       params: { workspace_id: workspaceId },
     });
+  },
+  removeVersion(workspaceId: number, templateId: number) {
+    return http.delete(`/template-audits/versions/${templateId}`, { params: { workspace_id: workspaceId } });
   },
   run(workspaceId: number, documentId: number, aiFieldIds: string[] = []) {
     return http.post<TemplateReview>("/template-audits/reviews", {
