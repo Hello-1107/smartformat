@@ -247,8 +247,8 @@ def analysis_report(kind: AnalysisKind, result: VersionCompareResult | Structure
         assert isinstance(result, StructureCheckResult)
         title = "章节与图表完整性"
         names = [docs[result.document_id].filename]
-        summary = f"识别到 {len(result.headings_found)} 个标题；发现 {len(result.findings)} 项需处理或核实。"
-        basis = "按提交时配置的必需章节、顺序及图表编号规则检查。"
+        summary = f"章节与图表检查发现 {len(result.findings)} 项需处理或核实。"
+        basis = "必需章节按文档文字出现与否检查，不要求标题格式；顺序按首次出现位置判断，图表按编号及引用规则检查。"
         findings = result.findings
     issues = [ReportIssue(item.category, item.status, item.message,
                           _analysis_suggestion(item.status, item.category),

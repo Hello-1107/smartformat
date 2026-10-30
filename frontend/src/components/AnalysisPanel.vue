@@ -17,8 +17,8 @@
         <label class="full-label">必需章节（每行一项，按期望顺序）<el-input v-model="requiredText" type="textarea" :rows="4" placeholder="摘要&#10;研究方法&#10;结论&#10;参考文献" /></label>
         <el-checkbox v-model="requireOrder">检查章节顺序</el-checkbox>
         <div class="action"><el-button type="primary" :disabled="!structureId || busy" :loading="busy==='structure'" @click="runStructure">检查完整性</el-button></div>
-        <p class="hint">图表题注、重复编号和正文引用一并检查；章节名称按标题原文匹配。</p>
-        <div v-if="structureResult" class="result"><div class="result-head"><h4>识别到 {{ structureResult.headings_found.length }} 个标题</h4><el-button :disabled="!structureResult.export_signature || !!busy" :loading="exportingKind==='structure'" @click="exportCurrent('structure')">导出当前结果 DOCX</el-button></div><FindingList :items="structureResult.findings" :documents="documents" @locate="(source) => locate(source, 'format')" /></div>
+        <p class="hint">必需章节只检查文档中是否出现对应文字，不要求标题格式；勾选顺序时按文字首次出现的位置判断。图表题注、重复编号和正文引用一并检查。</p>
+        <div v-if="structureResult" class="result"><div class="result-head"><h4>章节与图表检查结果</h4><el-button :disabled="!structureResult.export_signature || !!busy" :loading="exportingKind==='structure'" @click="exportCurrent('structure')">导出当前结果 DOCX</el-button></div><FindingList :items="structureResult.findings" :documents="documents" @locate="(source) => locate(source, 'format')" /></div>
       </el-tab-pane>
       <el-tab-pane label="跨文档数据核对" name="cross">
         <div class="controls"><label>核对材料（2–10 份）<el-select v-model="crossIds" multiple collapse-tags placeholder="选择材料"><el-option v-for="doc in documents" :key="doc.id" :value="doc.id" :label="doc.filename" /></el-select></label>

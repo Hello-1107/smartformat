@@ -12,7 +12,7 @@ from app.schemas.analysis import (
 from app.schemas.content_review import ContentParagraph
 from app.schemas.document import ParsedDocument, ParsedParagraph
 from app.schemas.rule import RuleSet
-from app.services.checker import run_check
+from app.services.checker import _semantic_anchor, run_check
 
 
 def _source(document_id: int, index: int | None, quote: str | None) -> SourceRef:
@@ -20,29 +20,42 @@ def _source(document_id: int, index: int | None, quote: str | None) -> SourceRef
 
 
 def _heading_name(text: str) -> str:
-    return re.sub(r"^\s*(?:第?[一二三四五六七八九十]+[章节]|[一二三四五六七八九十\d]+[.．、）)]|\d+\s+)?", "", text).strip().casefold()
+    return _semantic_anchor(text)
+
+
+def _searchable_text(text: str) -> str:
+    """只为文字查找折叠空白，不依赖 Word 段落样式。"""
+    return re.sub(r"\s+", "", text).casefold()
 
 
 def check_structure(
     document_id: int, parsed: ParsedDocument, required: list[str], require_order: bool,
 ) -> StructureCheckResult:
-    headings = [p for p in parsed.paragraphs if p.level is not None or p.is_title]
-    names = [_heading_name(p.text) for p in headings]
+    # 标题列表仅保留给结果数据；必需章节检查使用下面的全部段落文字，与样式无关。
+    # Word 目录标题常用普通段落样式和字间空格，不属于 Heading 1 等标题样式。
+    headings = [
+        p for p in parsed.paragraphs
+        if p.level is not None or p.is_title or (p.role == "body" and _heading_name(p.text) == "目录")
+    ]
+    searchable_paragraphs = [_searchable_text(p.text) for p in parsed.paragraphs]
     findings: list[Finding] = []
-    found_positions: list[int] = []
+    found_positions: list[tuple[int, int]] = []
+    found_paragraphs: list[ParsedParagraph] = []
     for expected in required:
-        name = _heading_name(expected)
+        name = _searchable_text(expected)
         if not name:
             raise ValueError("必需章节名称不能为空")
-        matches = [i for i, candidate in enumerate(names) if candidate == name]
-        if not matches:
+        first_match = next(
+            ((i, candidate.find(name)) for i, candidate in enumerate(searchable_paragraphs) if name in candidate),
+            None,
+        )
+        if first_match is None:
             findings.append(Finding(category="章节", status="missing", message=f"缺少必需章节「{expected}」"))
-        elif len(matches) > 1:
-            findings.append(Finding(category="章节", status="ambiguous", message=f"章节「{expected}」出现多次，请人工确认", sources=[_source(document_id, headings[i].index, headings[i].text) for i in matches]))
         else:
-            found_positions.append(matches[0])
+            found_positions.append(first_match)
+            found_paragraphs.append(parsed.paragraphs[first_match[0]])
     if require_order and found_positions != sorted(found_positions):
-        findings.append(Finding(category="章节", status="out_of_order", message="必需章节顺序与配置不一致", sources=[_source(document_id, headings[i].index, headings[i].text) for i in found_positions]))
+        findings.append(Finding(category="章节", status="out_of_order", message="必需章节顺序与配置不一致", sources=[_source(document_id, p.index, p.text) for p in found_paragraphs]))
 
     captions: dict[tuple[str, str], list[ParsedParagraph]] = {}
     references: dict[tuple[str, str], list[ParsedParagraph]] = {}

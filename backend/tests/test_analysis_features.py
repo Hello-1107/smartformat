@@ -3,12 +3,14 @@
 from io import BytesIO
 
 from docx import Document as WordDocument
+from docx.enum.style import WD_STYLE_TYPE
 
 from app.schemas.analysis import FieldSpec
 from app.schemas.content_review import ContentIssue, ContentReviewResult
 from app.schemas.document import FontInfo, ParsedDocument, ParsedParagraph
 from app.schemas.rule import RuleSet
 from app.services.document_analysis import check_structure, compare_fields, compare_versions
+from app.services.docx_parser import parse_docx
 from app.services.pdf_content import extract_pdf
 from app.schemas.content_review import ContentParagraph
 
@@ -39,6 +41,43 @@ def test_structure_reports_missing_out_of_order_and_unmatched_figure_reference()
     citation = next(item for item in result.findings if item.category == "图表" and item.status == "missing")
     assert citation.sources[0].paragraph_index == 1
     assert citation.sources[0].quote == "参见图 2。"
+
+
+def test_structure_recognizes_plain_toc_title_and_arabic_chapter_prefix(tmp_path) -> None:
+    document = WordDocument()
+    document.styles.add_style("TOC 1", WD_STYLE_TYPE.PARAGRAPH)
+    document.add_paragraph("目  录")
+    document.add_paragraph("第2章  项目整体设计\t3", style="TOC 1")
+    document.add_heading("第2章  项目整体设计", level=1)
+    path = tmp_path / "with-toc.docx"
+    document.save(path)
+
+    result = check_structure(4, parse_docx(path), ["目录", "项目整体设计"], True)
+
+    assert result.headings_found == ["目  录", "第2章  项目整体设计"]
+    assert not any(item.category == "章节" for item in result.findings)
+
+
+def test_structure_required_text_matches_body_without_heading_style_or_duplicate_warning() -> None:
+    parsed = _parsed(
+        ("正文中含有目  录文字。", None, 12),
+        ("正文包含项目整体设计的说明。", None, 12),
+        ("后文再次提到项目整体设计。", None, 12),
+    )
+
+    result = check_structure(4, parsed, ["目录", "项目整体设计"], True)
+
+    assert result.headings_found == []
+    assert not any(item.category == "章节" for item in result.findings)
+
+
+def test_structure_required_text_order_uses_first_occurrence_even_in_body() -> None:
+    parsed = _parsed(("项目整体设计先被提及。", None, 12), ("目  录", None, 12))
+
+    result = check_structure(4, parsed, ["目录", "项目整体设计"], True)
+
+    order_issue = next(item for item in result.findings if item.status == "out_of_order")
+    assert [source.paragraph_index for source in order_issue.sources] == [1, 0]
 
 
 def test_version_review_does_not_claim_removed_paragraph_issue_was_fixed() -> None:
