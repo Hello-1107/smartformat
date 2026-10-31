@@ -288,7 +288,7 @@ def create_rule(
     except APITimeoutError as exc:
         raise HTTPException(504, "DeepSeek 规则提取超时，请稍后重试") from exc
     except ValueError as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "DeepSeek 返回的规则无效或不完整，请重新提取") from exc
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"DeepSeek 返回的规则无效或不完整：{exc}。请检查要求后重试") from exc
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status.HTTP_502_BAD_GATEWAY, "DeepSeek 规则提取失败，请稍后重试"
