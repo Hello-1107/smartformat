@@ -2,13 +2,13 @@
   <div class="fields">
     <label>中文字体<el-input v-model="value.font!.name" clearable placeholder="不限制" /></label>
     <label>西文字体<el-input v-model="value.font!.ascii_name" clearable placeholder="不限制" /></label>
-    <label>字号（pt）<el-input-number v-model="value.font!.size" :min="1" :max="400" controls-position="right" /></label>
+    <label>字号（pt）<el-input-number v-model="value.font!.size" :min="1" :max="400" :value-on-clear="null" placeholder="不限制" controls-position="right" /><el-button v-if="value.font!.size != null" link type="primary" @click="value.font!.size = null">设为不限制</el-button></label>
     <label v-for="field in booleanFields" :key="field.key">{{ field.label }}<el-select v-model="value.font![field.key]" clearable placeholder="不限制"><el-option label="是" :value="true" /><el-option label="否" :value="false" /></el-select></label>
     <label>颜色（RGB）<el-input v-model="value.font!.color" clearable placeholder="如 000000；留空不限制" /></label>
     <label>对齐方式<el-select v-model="value.paragraph!.alignment" clearable placeholder="不限制"><el-option v-for="a in alignments" :key="a.value" :label="a.label" :value="a.value" /></el-select></label>
     <label>行距类型<el-select v-model="value.paragraph!.line_spacing_kind"><el-option label="倍数" value="multiple" /><el-option label="固定值（pt）" value="exact" /><el-option label="最小值（pt）" value="atLeast" /></el-select></label>
-    <label>行距<el-input-number v-model="value.paragraph!.line_spacing" :min="0.1" :max="1000" :step="0.1" controls-position="right" /></label>
-    <label v-for="field in spacingFields" :key="field.key">{{ field.label }}<el-input-number v-model="value.paragraph![field.key]" :min="field.key === 'first_line_indent_chars' ? -100 : 0" :max="2000" :step="0.5" controls-position="right" /></label>
+    <label>行距<el-input-number v-model="value.paragraph!.line_spacing" :min="0.1" :max="1000" :step="0.1" :value-on-clear="null" placeholder="不限制" controls-position="right" /><el-button v-if="value.paragraph!.line_spacing != null" link type="primary" @click="value.paragraph!.line_spacing = null">设为不限制</el-button></label>
+    <label v-for="field in spacingFields" :key="field.key">{{ field.label }}<el-input-number v-model="value.paragraph![field.key]" :min="field.key === 'first_line_indent_chars' ? -100 : 0" :max="2000" :step="0.5" :value-on-clear="null" placeholder="不限制" controls-position="right" /><el-button v-if="value.paragraph![field.key] != null" link type="primary" @click="value.paragraph![field.key] = null">设为不限制</el-button></label>
     <label v-for="field in listFields" :key="field.key">{{ field.label }}<el-select v-model="value.paragraph![field.key]" clearable placeholder="不限制"><el-option label="是" :value="true" /><el-option label="否" :value="false" /></el-select></label>
   </div>
 </template>

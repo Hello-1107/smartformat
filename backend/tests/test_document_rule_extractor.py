@@ -21,6 +21,26 @@ def _font(paragraph, name: str, size: float, bold: bool = False) -> None:
     run._element.get_or_add_rPr().get_or_add_rFonts().set(qn("w:eastAsia"), name)
 
 
+def test_extracted_zero_spacing_is_unrestricted_but_nonzero_is_preserved(tmp_path) -> None:
+    template = Document()
+    template.sections[0].header_distance = Cm(0)
+    paragraph = template.add_paragraph("这里是足够长的正文样例，用来验证模板提取的零值不会成为检查限制。")
+    paragraph.paragraph_format.space_before = Pt(12)
+    paragraph.paragraph_format.space_after = Pt(0)
+    paragraph.paragraph_format.first_line_indent = Pt(0)
+    path = tmp_path / "零值模板.docx"
+    template.save(path)
+
+    extraction = extract_candidates(path)
+    style = extraction.candidates["body"][0].style.paragraph
+    assert style is not None
+    assert style.space_before == 12
+    assert style.space_after is None
+    assert style.first_line_indent_chars is None
+    assert extraction.ruleset.page is not None
+    assert extraction.ruleset.page.header_distance_cm is None
+
+
 def _template_bytes(body_size: float = 12) -> bytes:
     doc = Document()
     doc.sections[0].page_width = Cm(21)

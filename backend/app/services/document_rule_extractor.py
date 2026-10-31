@@ -32,9 +32,15 @@ class TemplateExtraction(BaseModel):
 
 
 def _scope(paragraph: ParsedParagraph, font: FontInfo | None = None) -> ScopeRule:
+    paragraph_values = {key: getattr(paragraph, key) for key in ParagraphRule.model_fields}
+    # 候选样式中的 0 是样例观测值，不代表用户明确要求零间距/零缩进。
+    # 手动规则不经过这里，因此用户主动输入 0 时仍会严格检查。
+    for key in ("space_before", "space_after", "first_line_indent_chars"):
+        if paragraph_values[key] == 0:
+            paragraph_values[key] = None
     return ScopeRule(
         font=FontRule.model_validate((font or paragraph.font).model_dump()),
-        paragraph=ParagraphRule(**{key: getattr(paragraph, key) for key in ParagraphRule.model_fields}),
+        paragraph=ParagraphRule(**paragraph_values),
     )
 
 
@@ -158,7 +164,11 @@ def extract_candidates(path: str | Path, name: str | None = None, filename: str 
                 candidate.examples.append(paragraph.text[:160])
     if not groups:
         raise ValueError("文本模板没有可用于提取格式的正文或标题")
-    page = PageRule.model_validate(parsed.sections[0].model_dump(exclude={"index"})) if parsed.sections else None
+    page = None
+    if parsed.sections:
+        page_values = parsed.sections[0].model_dump(exclude={"index"})
+        page = PageRule.model_validate({key: None if isinstance(value, (int, float)) and value == 0 else value
+                                        for key, value in page_values.items()})
     regions = _extract_regions(parsed)
     document_checks = _document_checks(parsed)
     ruleset = RuleSet(name=(name or Path(original_name).stem).strip()[:200],

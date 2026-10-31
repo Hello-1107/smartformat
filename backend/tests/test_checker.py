@@ -59,6 +59,47 @@ def test_paragraph_rules() -> None:
     assert {"alignment", "line_spacing", "first_line_indent_chars"} <= fields
 
 
+def test_unrestricted_spacing_is_skipped_but_explicit_zero_is_checked() -> None:
+    doc = ParsedDocument(filename="a.docx", paragraphs=[_para(alignment="left", space_before=None, space_after=None)])
+    unrestricted = RuleSet(name="r", body=ScopeRule(paragraph=ParagraphRule(alignment="left", space_after=None, space_before=None)))
+    violations, _ = run_check(doc, unrestricted)
+    assert not any(item.field in {"space_before", "space_after"} for item in violations)
+
+    zero = RuleSet(name="r", body=ScopeRule(paragraph=ParagraphRule(space_before=0, space_after=0,
+                                                                     first_line_indent_chars=0)))
+    violations, _ = run_check(doc, zero)
+    assert any(item.field == "space_after" for item in violations)
+
+    nonzero = RuleSet(name="r", body=ScopeRule(paragraph=ParagraphRule(space_after=12)))
+    violations, _ = run_check(doc, nonzero)
+    assert any(item.field == "space_after" for item in violations)
+
+
+def test_docx_unset_after_spacing_is_skipped_only_when_rule_is_unrestricted(tmp_path) -> None:
+    from docx import Document
+    from docx.oxml.ns import qn
+    from app.services.docx_parser import parse_docx
+
+    path = tmp_path / "no-explicit-spacing.docx"
+    document = Document()
+    document.styles["Normal"].paragraph_format.space_after = None
+    defaults = document.styles.element.xpath("./w:docDefaults/w:pPrDefault/w:pPr")
+    if defaults:
+        spacing = defaults[0].find(qn("w:spacing"))
+        if spacing is not None:
+            defaults[0].remove(spacing)
+    document.add_paragraph("正文段落")
+    document.save(path)
+    parsed = parse_docx(path)
+    assert parsed.paragraphs[0].space_after is None
+    ruleset = RuleSet(name="r", body=ScopeRule(paragraph=ParagraphRule(alignment="left", space_after=None)))
+    violations, _ = run_check(parsed, ruleset)
+    assert not any(item.field == "space_after" for item in violations)
+    zero_ruleset = RuleSet(name="r", body=ScopeRule(paragraph=ParagraphRule(space_after=0)))
+    zero_violations, _ = run_check(parsed, zero_ruleset)
+    assert any(item.field == "space_after" for item in zero_violations)
+
+
 def test_page_rules() -> None:
     from app.schemas.document import ParsedSection
 

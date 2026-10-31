@@ -218,6 +218,16 @@ test('规则编辑保留独立标题和可恢复的不限制状态',async()=>{
   const result=state.cleaned();assert.equal(result.title.font.size,28);assert.equal(result.headings.h1.font.bold,null);
 });
 
+test('数值规则明确清空为不限制，保存时仍为 null',async()=>{
+  const {state}=await mount('components/RuleEditor.vue',{rule:null,draft:{name:'间距规则',body:{paragraph:{space_after:0,space_before:12}}}});
+  state.form.body.paragraph.space_after=null;
+  assert.equal(state.cleaned().body.paragraph.space_after,null);
+  assert.equal(state.cleaned().body.paragraph.space_before,12);
+  const source=await readFile(new URL('../src/components/ScopeFields.vue',import.meta.url),'utf8');
+  assert.match(source,/设为不限制/);
+  assert.match(source,/:value-on-clear="null"/);
+});
+
 test('历史表单报告按保存的模板快照展示',async()=>{
   const {state}=await mount('components/TemplateAuditPanel.vue',{workspaceId:null,documents:[],selectedDocumentId:null,acceptedFixes:[]});
   state.current={id:2,version:2,config:{blocks:[]}};

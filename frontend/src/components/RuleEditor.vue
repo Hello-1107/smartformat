@@ -1,6 +1,6 @@
 <template>
   <section class="editor">
-    <header><div><small>RULE CONFIGURATION</small><h3>{{ rule ? '规则编辑器' : '新建规则' }}<span v-if="isDirty"> · 未保存</span></h3><p>{{ form.template_regions?.length ? '按模板章节锚点映射并分区审查；可继续调整区域用途和样式。' : '大标题与一级标题分别配置；空白参数表示不限制。' }}</p></div>
+    <header><div><small>RULE CONFIGURATION</small><h3>{{ rule ? '规则编辑器' : '新建规则' }}<span v-if="isDirty"> · 未保存</span></h3><p>{{ form.template_regions?.length ? '按模板章节锚点映射并分区审查；可继续调整区域用途和样式。' : '大标题与一级标题分别配置；空白参数表示不限制。' }}旧规则中的 0 仍表示明确限制；如不需要，请设为“不限制”并保存。</p></div>
       <div class="actions"><el-button @click="emit('new')">新建规则</el-button><el-button v-if="rule" @click="emit('save-template', cleaned())">存为模板</el-button><el-button v-if="rule" @click="emit('versions')">版本历史</el-button><el-button @click="reset">还原</el-button><el-button type="primary" :loading="saving" :disabled="!form.name.trim()" @click="emit('save', cleaned())">{{ rule ? '保存规则' : '创建规则' }}</el-button></div>
     </header>
     <el-form label-position="top" :disabled="saving">
@@ -11,8 +11,8 @@
         <el-tab-pane label="各级标题"><div v-for="level in levels" :key="level" class="heading-card"><h4>{{ level.slice(1) }} 级标题</h4><ScopeFields :value="form.headings![level]!" /></div></el-tab-pane>
         <el-tab-pane label="页面与结构">
           <div class="grid"><label>纸张<el-select v-model="form.page!.paper" clearable placeholder="不限制"><el-option v-for="paper in ['A4','A3','A5','Letter','Legal']" :key="paper" :value="paper" /></el-select></label>
-          <label v-for="field in pageFields" :key="field.key">{{ field.label }}（cm）<el-input-number v-model="form.page![field.key]" :min="0" :max="200" :step="0.1" controls-position="right" /></label>
-          <label>最大标题层级<el-input-number v-model="form.heading_structure!.max_level" :min="1" :max="6" /></label>
+          <label v-for="field in pageFields" :key="field.key">{{ field.label }}（cm）<el-input-number v-model="form.page![field.key]" :min="0" :max="200" :step="0.1" :value-on-clear="null" placeholder="不限制" controls-position="right" /><el-button v-if="form.page![field.key] != null" link type="primary" @click="form.page![field.key] = null">设为不限制</el-button></label>
+          <label>最大标题层级<el-input-number v-model="form.heading_structure!.max_level" :min="1" :max="6" :value-on-clear="null" placeholder="不限制" /><el-button v-if="form.heading_structure!.max_level != null" link type="primary" @click="form.heading_structure!.max_level = null">设为不限制</el-button></label>
           <label>标题必须编号<el-select v-model="form.heading_structure!.require_numbered" clearable placeholder="不限制"><el-option label="是" :value="true" /><el-option label="否" :value="false" /></el-select></label></div>
         </el-tab-pane>
         <el-tab-pane v-if="form.template_regions?.length" label="模板章节">
