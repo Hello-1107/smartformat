@@ -149,6 +149,26 @@ test('工作区切换后迟到的列表不能覆盖当前页面',async()=>{
   assert.deepEqual(state.documents,[]);
 });
 
+test('格式自动修复先展示计划再下载副本',async()=>{
+  const m=globalThis.__reviewMocks;
+  m.workspace.currentId=1;
+  const plan={check_id:8,document_id:3,source_sha256:'hash',format_violation_indexes:[0],skipped:[{index:1,reason:'结构问题'}]};
+  m.documentApi.autoFormatPlan=async()=>({data:plan});
+  m.documentApi.autoFormatCopy=async(_id,_workspace,received)=>{assert.deepEqual(received,plan);return {data:new Blob(['docx']),headers:{'x-remaining-issues':'1'}};};
+  const {state}=await mount('views/HomeView.vue');
+  await flush();
+  state.documents=[{id:3,filename:'示例.docx',file_type:'docx'}];
+  state.selectedDocId=3;state.selectedRuleId=5;
+  await flush();
+  state.check={id:8,document_id:3,rule_id:5,violations:[{message:'字号错误'},{message:'缺少章节'}],summary:{total:2}};
+  await state.openAutoFormat();
+  assert.equal(state.autoDialog,true);
+  assert.deepEqual(state.autoPlan.format_violation_indexes,[0]);
+  await state.downloadAutoFormat();
+  assert.equal(state.autoDialog,false);
+  assert.equal(m.downloads[0][1],'示例_格式自动修复.docx');
+});
+
 test('删除当前工作区后清空页面状态和选择',async()=>{
   const m=globalThis.__reviewMocks;
   m.auth.user.id=7;

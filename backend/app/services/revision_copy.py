@@ -374,6 +374,8 @@ def build_revised_copy(
     source_name: str,
     format_violations: list[Violation],
     content_fixes: list[ContentReplacement],
+    *,
+    append_revision_list: bool = True,
 ) -> bytes:
     """生成内存中的修订副本并附加修订清单，绝不写入或替换源文件。"""
     if not format_violations and not content_fixes:
@@ -398,4 +400,4 @@ def build_revised_copy(
     formatted = BytesIO()
     doc.save(formatted)
     revised, content_entries = _apply_content_fixes(formatted.getvalue(), content_fixes)
-    return _append_revision_list(revised, source_name, [*entries, *content_entries])
+    return _append_revision_list(revised, source_name, [*entries, *content_entries]) if append_revision_list else revised

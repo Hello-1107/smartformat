@@ -6,6 +6,9 @@
 """
 
 from pathlib import Path
+from io import BytesIO
+from collections import Counter
+import json
 from urllib.parse import quote
 import logging
 
@@ -24,6 +27,10 @@ from app.schemas.check import Violation
 from app.schemas.content_review import ContentReviewResult
 from app.schemas.document import DocumentDetail, DocumentOut, ParsedDocument
 from app.schemas.revision import RevisedCopyCreate
+from pydantic import BaseModel
+from app.schemas.rule import RuleSet
+from app.services.checker import run_check
+from app.services.auto_format import AutoFormatPlan, build_auto_format_plan, violation_key
 from app.schemas.template_audit import TemplateReviewResult
 from app.services.docx_parser import parse_docx
 from app.services.storage import save_upload, read_upload, require_storage_quota
@@ -40,6 +47,74 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 logger = logging.getLogger(__name__)
 
 ALLOWED_SUFFIXES = (".docx", ".pdf")
+
+
+class AutoFormatApply(BaseModel):
+    workspace_id: int
+    check_id: int
+    source_sha256: str
+
+
+def _auto_format_source(db: Session, user: User, workspace_id: int,
+                        document_id: int, check_id: int) -> tuple[Document, CheckResult]:
+    require_membership(db, user, workspace_id)
+    document = db.get(Document, document_id)
+    check = db.get(CheckResult, check_id)
+    if document is None or document.workspace_id != workspace_id:
+        raise HTTPException(404, "文档不存在")
+    if check is None or check.workspace_id != workspace_id or check.document_id != document_id:
+        raise HTTPException(404, "格式审查结果不存在")
+    if document.file_type != "docx":
+        raise HTTPException(400, "仅支持自动修复 DOCX 文档")
+    if not Path(document.stored_path).is_file():
+        raise HTTPException(404, "文档文件已丢失")
+    if not (check.ruleset_snapshot or {}).get("ruleset"):
+        raise HTTPException(400, "旧审查记录缺少规则快照，请重新进行格式审查")
+    ruleset = RuleSet.model_validate(check.ruleset_snapshot["ruleset"])
+    current_violations, _ = run_check(parse_docx(document.stored_path), ruleset)
+    def fingerprint(items: list[Violation]) -> Counter:
+        return Counter((violation_key(item), json.dumps(item.expected, sort_keys=True, ensure_ascii=False))
+                       for item in items if item.category in {"font", "paragraph", "page"} and is_repairable_format(item))
+    stored = [Violation.model_validate(item) for item in check.violations_json]
+    if fingerprint(stored) != fingerprint(current_violations):
+        raise HTTPException(409, "文档与审查记录已不一致，请重新进行格式审查")
+    return document, check
+
+
+@router.get("/{document_id}/auto-format-plan", response_model=AutoFormatPlan)
+def auto_format_plan(document_id: int, workspace_id: int, check_id: int,
+                     db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> AutoFormatPlan:
+    document, check = _auto_format_source(db, user, workspace_id, document_id, check_id)
+    return build_auto_format_plan(document.stored_path, document.id, check.id, check.violations_json)
+
+
+@router.post("/{document_id}/auto-format-copy")
+def auto_format_copy(document_id: int, body: AutoFormatApply,
+                     db: Session = Depends(get_db), user: User = Depends(get_current_user)) -> Response:
+    document, check = _auto_format_source(db, user, body.workspace_id, document_id, body.check_id)
+    plan = build_auto_format_plan(document.stored_path, document.id, check.id, check.violations_json)
+    if plan.source_sha256 != body.source_sha256:
+        raise HTTPException(409, "源文档已变化，请重新预览修复计划")
+    if not plan.format_violation_indexes:
+        raise HTTPException(400, "没有可安全自动修复的格式问题")
+    fixes = [Violation.model_validate(check.violations_json[index]) for index in plan.format_violation_indexes]
+    try:
+        content = build_revised_copy(document.stored_path, document.filename, fixes, [], append_revision_list=False)
+        ruleset = RuleSet.model_validate(check.ruleset_snapshot["ruleset"])
+        remaining, summary = run_check(parse_docx(BytesIO(content)), ruleset)
+    except (RepairError, ValueError) as exc:
+        raise HTTPException(409, f"自动修复未通过复查：{exc}") from exc
+    unresolved = {violation_key(item) for item in remaining} & {violation_key(item) for item in fixes}
+    original_signatures = {(violation_key(item), json.dumps(item.expected, sort_keys=True, ensure_ascii=False))
+                           for item in (Violation.model_validate(value) for value in check.violations_json)}
+    new_signatures = {(violation_key(item), json.dumps(item.expected, sort_keys=True, ensure_ascii=False)) for item in remaining}
+    if unresolved or not new_signatures.issubset(original_signatures):
+        raise HTTPException(409, "自动修复未通过复查，未生成副本；请逐项修订")
+    filename = f"{Path(document.filename).stem}_格式自动修复.docx"
+    return Response(content, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(filename)}",
+                             "Cache-Control": "no-store", "X-Remaining-Issues": str(summary.total),
+                             "X-Fixed-Issues": str(len(fixes)), "Access-Control-Expose-Headers": "X-Remaining-Issues, X-Fixed-Issues"})
 
 
 def _to_detail(doc: Document) -> DocumentDetail:

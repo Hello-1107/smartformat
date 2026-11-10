@@ -21,6 +21,7 @@
         <section class="review-bar">
           <div class="selection"><span class="selection-icon doc">D</span><div><small>当前文档</small><b>{{ selectedDoc?.filename ?? '尚未选择文档' }}</b></div></div>
           <el-button class="revision-button" :disabled="!selectedDocId || selectedFixCount === 0 || selectedDoc?.file_type === 'pdf'" :loading="generatingCopy" @click="generateRevisedCopy">生成修订后副本<span v-if="selectedFixCount">（{{ selectedFixCount }}）</span></el-button>
+          <el-button :disabled="!check?.violations.length || selectedDoc?.file_type === 'pdf'" :loading="loadingAutoPlan" @click="openAutoFormat">一键修复格式</el-button>
         </section>
         <el-card shadow="never" class="main-card">
           <el-tabs v-model="tab" class="main-tabs">
@@ -70,6 +71,14 @@
     <BatchCheckDialog v-model="batchDialogVisible" :documents="wordDocuments" :rule="selectedRule" :running="batchRunning" @run="runBatchCheck" />
     <RuleVersionsDialog v-model="versionDialogVisible" :rule="selectedRule" @restored="onRuleRestored" />
     <TemplateCandidatesDialog :extraction="templateExtraction" @cancel="templateExtraction = null" @confirm="onConfirmCandidates" />
+    <el-dialog v-model="autoDialog" title="格式自动修复计划" width="min(680px, 92vw)">
+      <template v-if="autoPlan">
+        <p>可自动修复 {{ autoPlan.format_violation_indexes.length }} 项，跳过 {{ autoPlan.skipped.length }} 项。仅修改确定的格式，原文件保持不变。</p>
+        <div class="auto-plan-list"><strong>将修复</strong><p v-for="index in autoPlan.format_violation_indexes" :key="`fix-${index}`">{{ check?.violations[index]?.message }}</p></div>
+        <div v-if="autoPlan.skipped.length" class="auto-plan-list"><strong>需要手动处理</strong><p v-for="item in autoPlan.skipped" :key="`skip-${item.index}`">{{ check?.violations[item.index]?.message }} — {{ item.reason }}</p></div>
+      </template>
+      <template #footer><el-button @click="autoDialog = false">取消</el-button><el-button type="primary" :disabled="!autoPlan?.format_violation_indexes.length" :loading="downloadingAuto" @click="downloadAutoFormat">确认并下载 DOCX</el-button></template>
+    </el-dialog>
   </el-container>
 </template>
 
@@ -97,7 +106,7 @@ import { errText } from "@/api/http";
 import { downloadBlob, downloadErrorText } from "@/utils/download";
 import { useAuthStore } from "@/stores/auth";
 import { useWorkspaceStore } from "@/stores/workspace";
-import type { AnalysisSource, CheckItem, ContentRepairFix, DocumentItem, RuleItem, RuleSet, RuleTemplate, TemplateRepairFix, TemplateExtraction } from "@/types";
+import type { AnalysisSource, AutoFormatPlan, CheckItem, ContentRepairFix, DocumentItem, RuleItem, RuleSet, RuleTemplate, TemplateRepairFix, TemplateExtraction } from "@/types";
 
 const router = useRouter(); const auth = useAuthStore(); const ws = useWorkspaceStore();
 const documents = ref<DocumentItem[]>([]); const rules = ref<RuleItem[]>([]); const checks = ref<CheckItem[]>([]); const templates = ref<RuleTemplate[]>([]);
@@ -137,6 +146,11 @@ const selectedFormatIndexes = computed(() => check.value ? acceptedFormat.value[
 const selectedContentFixes = computed(() => selectedDocId.value == null ? [] : Object.values(acceptedContent.value).filter(item => item.documentId === selectedDocId.value).map(item => item.fix));
 const selectedTemplateFixes = computed(() => selectedDocId.value == null ? [] : Object.values(acceptedTemplate.value).filter(item => item.documentId === selectedDocId.value).map(item => item.fix));
 const selectedFixCount = computed(() => selectedFormatIndexes.value.length + selectedContentFixes.value.length + selectedTemplateFixes.value.length);
+const autoPlan = ref<AutoFormatPlan | null>(null);
+const autoDialog = ref(false);
+const loadingAutoPlan = ref(false);
+const downloadingAuto = ref(false);
+watch(() => [selectedDocId.value, check.value?.id], () => { autoPlan.value = null; autoDialog.value = false; });
 const canRunSelectedReviews = computed(() => {
   if (selectedDocId.value == null || reviewTypes.value.length === 0 || running.value || extractingTemplate.value) return false;
   if (reviewTypes.value.includes('format') && (ruleEditor.value?.isDirty || selectedDoc.value?.file_type === 'pdf')) return false;
@@ -270,6 +284,33 @@ function onAcceptTemplateFix(fix: TemplateRepairFix) { if (selectedDocId.value =
 function onRejectTemplateFix(reviewId: number, issueIndex: number) { if (selectedDocId.value == null) return; const next = { ...acceptedTemplate.value }; delete next[`${selectedDocId.value}:${reviewId}:${issueIndex}`]; acceptedTemplate.value = next; }
 function onClearTemplateReview(reviewId: number) { const next = { ...acceptedTemplate.value }; for (const [key, item] of Object.entries(next)) if (item.fix.review_id === reviewId) delete next[key]; acceptedTemplate.value = next; }
 async function generateRevisedCopy() { if (ws.currentId == null || selectedDocId.value == null || selectedFixCount.value === 0) return; const valid=context(selectedDocId.value);const filename=`${(selectedDoc.value?.filename ?? "文档.docx").replace(/\.docx$/i, "")}_修订后副本.docx`;generatingCopy.value = true; try { const response = await documentApi.revisedCopy(selectedDocId.value, { workspace_id: ws.currentId, check_id: selectedFormatIndexes.value.length ? check.value?.id : null, format_violation_indexes: selectedFormatIndexes.value, content_fixes: selectedContentFixes.value, template_fixes: selectedTemplateFixes.value }); if(!valid())return;const blob = response.data as Blob; if (!blob.size) throw new Error("生成的副本为空"); downloadBlob(blob, filename); ElMessage.success("已生成修订后副本，原始文件未修改"); } catch (e) { if(valid())ElMessage.error(await copyErrorText(e)); } finally { generatingCopy.value = false; } }
+async function openAutoFormat() {
+  if (ws.currentId == null || selectedDocId.value == null || !check.value || loadingAutoPlan.value) return;
+  const valid = context(selectedDocId.value, check.value.rule_id);
+  const checkId = check.value.id;
+  loadingAutoPlan.value = true;
+  try {
+    const response = await documentApi.autoFormatPlan(selectedDocId.value, ws.currentId, checkId);
+    if (!valid() || check.value?.id !== checkId) return;
+    autoPlan.value = response.data;
+    autoDialog.value = true;
+  } catch (error) { if (valid()) ElMessage.error(errText(error)); }
+  finally { loadingAutoPlan.value = false; }
+}
+async function downloadAutoFormat() {
+  const plan = autoPlan.value;
+  if (!plan || ws.currentId == null || selectedDocId.value !== plan.document_id || check.value?.id !== plan.check_id || downloadingAuto.value) return;
+  const valid = context(plan.document_id);
+  downloadingAuto.value = true;
+  try {
+    const response = await documentApi.autoFormatCopy(plan.document_id, ws.currentId, plan);
+    if (!valid() || check.value?.id !== plan.check_id) return;
+    downloadBlob(response.data as Blob, `${(selectedDoc.value?.filename ?? '文档.docx').replace(/\.docx$/i, '')}_格式自动修复.docx`);
+    autoDialog.value = false;
+    ElMessage.success(`已生成修复副本，复查剩余 ${response.headers['x-remaining-issues'] ?? '未知'} 项问题；原文件未修改`);
+  } catch (error) { if (valid()) ElMessage.error(await copyErrorText(error)); }
+  finally { downloadingAuto.value = false; }
+}
 async function exportFormatReport() {
   const current = check.value;
   if (!current || exportingFormatId.value != null) return;
@@ -337,4 +378,5 @@ onMounted(async () => { try { await loadAll(); } catch (e) { ElMessage.error(err
 .text-template-head{display:flex;align-items:center;justify-content:space-between;gap:16px}.text-template-head h3{margin:0;color:#22324f}.text-template-head p,.text-template-hint{color:#8995a8;font-size:12px;line-height:1.6}.text-template-head p{margin:6px 0}.text-template-hint{margin:10px 0}.text-review-selection{display:flex;flex-wrap:wrap;gap:14px;margin:18px 0}.text-review-selection label{display:grid;flex:1;min-width:200px;gap:7px;color:#657590;font-size:12px}.text-review-selection .el-select{width:100%}.text-review-actions{display:flex;align-items:center;flex-wrap:wrap;gap:12px;margin:12px 0}.text-review-actions .review-types{margin-left:0}.text-review-tabs{margin-top:20px}.review-progress{color:#526ed9;font-size:12px}.review-bar .revision-button{margin-left:auto}@media(max-width:700px){.text-template-head{align-items:flex-start;flex-direction:column}.text-review-actions{align-items:stretch;flex-direction:column}.text-review-actions .el-button{margin-left:0}.review-bar .revision-button{margin-left:0}}
 .app-shell{min-width:0;height:100vh;color:#273653;background:#f5f7fb}.topbar{z-index:2;display:flex;align-items:center;height:66px;padding:0 26px;border-bottom:1px solid #e7ebf3;background:rgba(255,255,255,.95);box-shadow:0 2px 12px rgba(33,48,80,.03)}.brand{display:flex;align-items:center;gap:10px;color:#172442;font-size:17px;font-weight:800;letter-spacing:.02em;white-space:nowrap}.brand small{display:block;margin-top:-1px;color:#8c9ab2;font-size:9px;font-weight:700;letter-spacing:.1em}.brand-mark{display:grid;place-items:center;width:31px;height:31px;color:#fff;border-radius:9px;background:linear-gradient(135deg,#5b77f4,#314fd4);box-shadow:0 5px 12px rgba(59,82,205,.3);font-family:Georgia,serif;font-size:19px}.workspace-picker{display:flex;align-items:center;gap:8px;margin-left:52px}.workspace-picker :deep(.el-select){width:178px}.workspace-picker :deep(.el-input__wrapper){background:#f6f8fc;box-shadow:0 0 0 1px #edf0f5 inset}.workspace-label{color:#8c99ad;font-size:12px}.new-workspace{font-size:12px}.topbar-spacer{flex:1}.user-area{display:flex;align-items:center;gap:8px}.avatar{display:grid;place-items:center;width:30px;height:30px;border-radius:50%;color:#526ed9;background:#e9eeff;font-size:12px;font-weight:800}.user-name{color:#53617a;font-size:13px;cursor:pointer}.chevron{margin-left:3px;color:#96a1b3}.workspace-body{min-height:0}.left-rail,.right-rail{overflow-y:auto;padding:18px 14px;background:#fbfcfe}.left-rail{border-right:1px solid #e8ecf3}.right-rail{border-left:1px solid #e8ecf3}.side-card,.history-card,.main-card{border:1px solid #e7ebf3;border-radius:12px}.side-card{margin-bottom:13px}.side-card :deep(.el-card__body){padding:15px}.content-main{overflow-y:auto;padding:24px}.hero-row{display:flex;align-items:center;justify-content:space-between;gap:20px;max-width:1260px;margin:0 auto 20px}.eyebrow{margin:0 0 5px;color:#6d80a6;font-size:10px;font-weight:800;letter-spacing:.13em}h1{margin:0;color:#172541;font-size:25px;letter-spacing:-.03em}.hero-copy{margin:7px 0 0;color:#8995a8;font-size:13px}.stats{display:flex;overflow:hidden;border:1px solid #e6ebf4;border-radius:10px;background:#fff}.stats div{display:grid;min-width:75px;padding:9px 14px;border-right:1px solid #edf0f5;text-align:center}.stats div:last-child{border:0}.stats b{color:#344767;font-size:17px}.stats span{margin-top:2px;color:#98a3b5;font-size:10px}.success-text{color:#169167!important}.warning-text{color:#dc6645!important}.review-bar{display:flex;align-items:center;gap:12px;max-width:1260px;padding:13px 16px;margin:0 auto 17px;border:1px solid #e5eaf4;border-radius:12px;background:#fff;box-shadow:0 5px 20px rgba(39,58,94,.035)}.selection{display:flex;align-items:center;min-width:0;gap:9px}.selection-icon{display:grid;place-items:center;width:31px;height:31px;flex:0 0 auto;border-radius:8px;font-size:11px;font-weight:800}.selection-icon.doc{color:#4e69ca;background:#e9efff}.selection-icon.rule{color:#9a63cc;background:#f3eaff}.selection div{display:grid;min-width:0;gap:2px}.selection small{color:#9aa5b7;font-size:10px}.selection b{display:block;max-width:190px;overflow:hidden;color:#384762;font-size:12px;text-overflow:ellipsis;white-space:nowrap}.flow-line{color:#b0bbcf}.review-types{display:flex;margin-left:auto;white-space:nowrap}.review-types :deep(.el-checkbox-button__inner){padding:8px 9px;font-size:11px}.batch-button{margin-left:0}.run-button{margin-left:0;padding-right:16px;padding-left:16px;border:0;background:linear-gradient(135deg,#5f7bf5,#4160dc);box-shadow:0 5px 12px rgba(65,96,220,.22)}.run-button span{margin-left:6px}.main-card{max-width:1260px;min-height:575px;margin:0 auto 22px}.main-card :deep(.el-card__body){padding:0 20px 20px}.main-tabs :deep(.el-tabs__header){margin-bottom:20px}.main-tabs :deep(.el-tabs__nav-wrap::after){height:1px;background:#edf0f5}.main-tabs :deep(.el-tabs__item){height:55px;padding:0 18px;color:#77849b;font-size:13px}.main-tabs :deep(.el-tabs__item.is-active){color:#4766dc;font-weight:700}.tab-count{display:inline-grid;place-items:center;min-width:16px;height:16px;margin-left:3px;border-radius:8px;color:#fff;background:#ec7857;font-size:10px;line-height:1}.json{max-height:500px;padding:18px;overflow:auto;border:1px solid #e8edf5;border-radius:10px;color:#3e4c68;background:#f7f9fc;font-size:12px;line-height:1.6}.history-card{min-height:250px}.history-card :deep(.el-card__body){padding:15px 11px}@media(max-width:1180px){.right-rail{display:none}.review-bar{flex-wrap:wrap}.review-types{margin-left:0}}@media(max-width:900px){.left-rail{width:248px!important}.content-main{padding:18px}.workspace-picker{margin-left:22px}.workspace-label{display:none}}@media(max-width:700px){.topbar{height:58px;padding:0 14px}.brand small,.workspace-picker,.user-name{display:none}.user-area{margin-left:auto}.left-rail{display:none}.content-main{padding:15px}.hero-row{display:block}.stats{width:max-content;margin-top:14px}.review-bar{align-items:stretch;flex-direction:column;gap:9px}.flow-line{display:none}.selection b{max-width:none}.review-types{width:100%}.review-types :deep(.el-checkbox-button){flex:1}.review-types :deep(.el-checkbox-button__inner){width:100%}.batch-button,.revision-button,.run-button{width:100%;margin-top:4px}.main-card :deep(.el-card__body){padding:0 12px 14px}.main-tabs :deep(.el-tabs__item){padding:0 10px;font-size:12px}}
 @media(max-width:700px){.app-shell{height:auto;min-height:100vh}.workspace-body{flex-direction:column}.left-rail{display:grid;width:100%!important;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:10px;overflow:visible;box-sizing:border-box}.workspace-picker{display:flex;margin-left:0;flex-wrap:wrap}.topbar{height:auto;min-height:58px;gap:12px;flex-wrap:wrap;padding:12px}.workspace-picker :deep(.el-select){width:140px}.content-main{overflow:visible}}
+.auto-plan-list{max-height:180px;overflow:auto;margin:12px 0;padding:10px 14px;border:1px solid #e5eaf3;border-radius:8px}.auto-plan-list p{margin:8px 0;color:#56657e;font-size:12px;line-height:1.5}
 </style>

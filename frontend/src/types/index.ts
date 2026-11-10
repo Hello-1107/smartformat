@@ -455,3 +455,11 @@ export interface RevisedCopyRequest {
   content_fixes: ContentRepairFix[];
   template_fixes: TemplateRepairFix[];
 }
+
+export interface AutoFormatPlan {
+  check_id: number;
+  document_id: number;
+  source_sha256: string;
+  format_violation_indexes: number[];
+  skipped: { index: number; reason: string }[];
+}

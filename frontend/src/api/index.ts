@@ -12,6 +12,7 @@ import type {
   TemplateBlock,
   TemplateReview,
   RevisedCopyRequest,
+  AutoFormatPlan,
   TokenResponse,
   TemplateExtraction,
   VersionCompareResult,
@@ -78,6 +79,16 @@ export const documentApi = {
       responseType: "blob",
       timeout: 120000,
     });
+  },
+  autoFormatPlan(documentId: number, workspaceId: number, checkId: number) {
+    return http.get<AutoFormatPlan>(`/documents/${documentId}/auto-format-plan`, {
+      params: { workspace_id: workspaceId, check_id: checkId }, timeout: 120000,
+    });
+  },
+  autoFormatCopy(documentId: number, workspaceId: number, plan: AutoFormatPlan) {
+    return http.post(`/documents/${documentId}/auto-format-copy`, {
+      workspace_id: workspaceId, check_id: plan.check_id, source_sha256: plan.source_sha256,
+    }, { responseType: "blob", timeout: 120000 });
   },
 };
 

@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from io import BytesIO
 from copy import deepcopy
 from typing import Iterator, Any
 import re
@@ -437,9 +438,9 @@ def _parse_section(section: object, index: int) -> ParsedSection:
     )
 
 
-def parse_docx(path: str | Path) -> ParsedDocument:
+def parse_docx(path: str | Path | BytesIO) -> ParsedDocument:
     """解析 docx 为结构化数据。"""
-    doc = Document(str(path))
+    doc = Document(path if isinstance(path, BytesIO) else str(path))
     numbering_el = None
     try:
         numbering_part = doc.part.numbering_part
@@ -494,5 +495,5 @@ def parse_docx(path: str | Path) -> ParsedDocument:
             )
         )
 
-    filename = Path(path).name
+    filename = Path(path).name if not isinstance(path, BytesIO) else "修订后副本.docx"
     return ParsedDocument(filename=filename, sections=sections, paragraphs=paragraphs)
